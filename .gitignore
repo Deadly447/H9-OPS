@@ -1,0 +1,11 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+__pycache__/
+*.jks
+*.keystore
+*.b64
+keys.conf
