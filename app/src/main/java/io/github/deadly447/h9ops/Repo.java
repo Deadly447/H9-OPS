@@ -35,6 +35,8 @@ import io.github.deadly447.h9ops.aprs.Messenger;
 import io.github.deadly447.h9ops.aprs.PositionShare;
 import io.github.deadly447.h9ops.aprs.Station;
 import io.github.deadly447.h9ops.aprs.StationStore;
+import io.github.deadly447.h9ops.aprs.Kiss;
+import io.github.deadly447.h9ops.track.Tracks;
 
 /**
  * App-wide state: heard stations, connection status and the saved radio.
@@ -83,7 +85,7 @@ public final class Repo {
     /** Developer log (Settings → Developer mode). */
     public final DevLog dev;
     /** Recorded tracks (TrackService adds the phone's GPS, addFrame the stations heard). */
-    public final io.github.deadly447.h9ops.track.Tracks tracks;
+    public final Tracks tracks;
     private final Set<String> unread = new HashSet<>();
     private String openThread;        // conversation on screen right now (no notification for it)
     private String notice;            // one-off message for the screen (radio PIN replies)
@@ -94,7 +96,7 @@ public final class Repo {
         this.ctx = ctx;
         this.prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE);
         dev = DevLog.get(ctx);
-        tracks = new io.github.deadly447.h9ops.track.Tracks(new File(ctx.getFilesDir(), "tracks"), io);
+        tracks = new Tracks(new File(ctx.getFilesDir(), "tracks"), io);
         messenger = new Messenger(new Messenger.Config() {
             @Override public String myCall() { return Repo.this.myCall(); }
             @Override public List<String> path() { return Repo.this.txPath(); }
@@ -215,7 +217,7 @@ public final class Repo {
         if (err != null) return err;
         if (transmitter == null) return "Connect to the radio first";
         pendingPin = pin;
-        if (!transmitter.sendCommand(io.github.deadly447.h9ops.aprs.Kiss.command("H9PS" + pin))) {
+        if (!transmitter.sendCommand(Kiss.command("H9PS" + pin))) {
             pendingPin = null;
             return "Could not send to the radio";
         }
@@ -225,7 +227,7 @@ public final class Repo {
     /** KISS command frame for the unlock that goes before each transmission, or null without a PIN. */
     byte[] unlockFrame() {
         String pin = radioPin();
-        return pin == null ? null : io.github.deadly447.h9ops.aprs.Kiss.command("H9PU" + pin);
+        return pin == null ? null : Kiss.command("H9PU" + pin);
     }
 
     /** A reply from the radio's PIN code ("H9PR" + one letter). */
@@ -277,7 +279,7 @@ public final class Repo {
 
     /** Saves the TX delay and, if the radio is connected, sends it now. */
     public void setTxDelay(int ms) {
-        int v = ms < 0 ? -1 : Math.min(ms, io.github.deadly447.h9ops.aprs.Kiss.TXDELAY_MAX_MS);
+        int v = ms < 0 ? -1 : Math.min(ms, Kiss.TXDELAY_MAX_MS);
         if (v == txDelayMs()) return;
         prefs.edit().putInt("txdelay_ms", v).apply();
         if (v >= 0) sendTxDelay();
@@ -288,7 +290,7 @@ public final class Repo {
     private void sendTxDelay() {
         int ms = txDelayMs();
         if (ms < 0 || transmitter == null) return;
-        boolean ok = transmitter.sendCommand(io.github.deadly447.h9ops.aprs.Kiss.txDelay(ms));
+        boolean ok = transmitter.sendCommand(Kiss.txDelay(ms));
         dev.log("KISS", "TX delay " + ms + " ms " + (ok ? "sent to the radio" : "not sent: radio not connected"));
     }
 
@@ -456,12 +458,12 @@ public final class Repo {
     /** If a received message is a position (PositionShare), show it on that station. */
     private void applySharedPosition(Messenger.Msg m, boolean live) {
         if (m.outgoing) return;
-        io.github.deadly447.h9ops.aprs.PositionShare.Pos pos = io.github.deadly447.h9ops.aprs.PositionShare.decode(m.text);
+        PositionShare.Pos pos = PositionShare.decode(m.text);
         if (pos == null) return;
         String who = m.from();
-        store.addShared(m.time, io.github.deadly447.h9ops.aprs.PositionShare.toPacket(who, pos,
+        store.addShared(m.time, PositionShare.toPacket(who, pos,
                 who + " (position by message)"));
-        if (live) tracks.seen(m.time, who, pos.lat, pos.lon, pos.blur != io.github.deadly447.h9ops.aprs.PositionShare.Blur.EXACT);
+        if (live) tracks.seen(m.time, who, pos.lat, pos.lon, pos.blur != PositionShare.Blur.EXACT);
     }
 
     private void applySharedPositions(String peer) {

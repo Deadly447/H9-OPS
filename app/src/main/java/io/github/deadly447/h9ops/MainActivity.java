@@ -63,6 +63,7 @@ import io.github.deadly447.h9ops.aprs.PositionShare;
 import io.github.deadly447.h9ops.aprs.Telemetry;
 import io.github.deadly447.h9ops.aprs.Station;
 import io.github.deadly447.h9ops.aprs.Symbols;
+import io.github.deadly447.h9ops.track.Track;
 
 /** One screen: connection bar, then either the heard-stations list or the raw packet log. */
 @SuppressLint("MissingPermission")   // checked in hasPermissions() before any Bluetooth call
@@ -643,20 +644,20 @@ public class MainActivity extends Activity implements Repo.Listener {
     }
 
     private void showTracks() {
-        List<io.github.deadly447.h9ops.track.Track> list = repo.tracks.list();
-        io.github.deadly447.h9ops.track.Track cur = repo.tracks.current();
+        List<Track> list = repo.tracks.list();
+        Track cur = repo.tracks.current();
         if (list.isEmpty() && cur == null) {
             new AlertDialog.Builder(this).setTitle("Tracks")
                     .setMessage("No tracks yet. ⋮ → Record track starts one.")
                     .setPositiveButton("OK", null).show();
             return;
         }
-        List<io.github.deadly447.h9ops.track.Track> all = new ArrayList<>();
+        List<Track> all = new ArrayList<>();
         if (cur != null) all.add(cur);
         all.addAll(list);
         String[] rows = new String[all.size()];
         for (int i = 0; i < all.size(); i++) {
-            io.github.deadly447.h9ops.track.Track t = all.get(i);
+            Track t = all.get(i);
             rows[i] = (t == cur ? "● " : "") + t.title() + "\n" + TrackService.summary(t);
         }
         new AlertDialog.Builder(this)
@@ -666,7 +667,7 @@ public class MainActivity extends Activity implements Repo.Listener {
                 .show();
     }
 
-    private void trackActions(io.github.deadly447.h9ops.track.Track t, boolean recording) {
+    private void trackActions(Track t, boolean recording) {
         AlertDialog.Builder b = new AlertDialog.Builder(this)
                 .setTitle(t.title())
                 .setMessage(TrackService.summary(t) + "\n" + t.me.size() + " GPS points, " + t.seen.size()
