@@ -60,9 +60,36 @@ The trade-off is a little more setup, such as making your own map file once
 (see [MAPS.md](MAPS.md)). That's on purpose: the setup happens while things
 are calm, so nothing has to be fetched when they aren't.
 
+## Who it's for
+
+H9 OPS is for **local, close contact when the grid is down**: families,
+neighborhoods, and local groups who need to know where their people are and
+reach them when the phones, power and internet don't work, without giving up
+their privacy to do it.
+
+- **Families and households:** check on each other and share where you are,
+  radio to radio, with no cell signal.
+- **Neighborhoods and local groups:** a few radios and phones become a private
+  local network for an outage, a storm or an evacuation. The TD-H9 can also
+  work as a digipeater, so one radio left on a hill, a rooftop or a mast
+  repeats everyone else's packets and stretches the group's range.
+- **Anyone who wants their data kept close:** the app can't send anything to
+  the internet, and there's nothing to sign up for.
+- **TD-H9 owners who want the radio to stay the radio they know:** the P2
+  firmware is TIDRADIO's own with a few targeted fixes, not a replacement.
+
+**What it isn't.** H9 OPS doesn't do internet maps, aprs.fi or iGating. It does
+fewer things on purpose, so the things it does keep working when nothing else
+does.
+
+**Encrypted messages.** My own research has shown that encrypting messages
+between H9 radios works, for even more privacy. It isn't part of the public
+release.
+
 ## Contents
 
 - [Why it works this way](#why-it-works-this-way)
+- [Who it's for](#who-its-for)
 - [Radio firmware (P2)](#radio-firmware-p2)
 - [Install](#install)
 - [Getting started](#getting-started)
