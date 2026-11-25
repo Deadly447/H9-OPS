@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<title>H9 OPS firmware P2 patcher</title>
+<style>
+  body { margin: 0; background: #000; color: #ededed; font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 28px 20px 48px; }
+  h1 { font: 800 26px ui-monospace, monospace; margin: 0 0 6px; } h1 span { color: #ffb000; }
+  .muted { color: #9a9a9a; } code { font-family: ui-monospace, monospace; color: #ffb000; }
+  .box { border: 1px solid #262626; background: #0d0d0d; border-radius: 14px; padding: 16px; margin: 16px 0; }
+  label.pick { display: block; padding: 18px; border: 2px dashed #ffb000; border-radius: 14px; text-align: center; cursor: pointer; }
+  input[type=file] { display: none; }
+  #out { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; }
+  a { color: #ffb000; } .ok { color: #7bd88f; } .bad { color: #ff6b61; }
+  a.button { display: inline-block; margin-top: 12px; padding: 12px 18px; background: #ffb000; color: #000; font-weight: 800; border-radius: 12px; text-decoration: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>H9 OPS firmware <span>P2</span></h1>
+  <p class="muted">Turns TIDRADIO's official TD-H9 V1.0.38 firmware into P2, here in your browser. Nothing is uploaded; this page works offline.</p>
+  <div class="box">
+    <ol>
+      <li>Get the official TD-H9 firmware from TIDRADIO (their firmware page, the USB-C update package) and unzip it. You need the file <code>TD-H9-V1.0.38.fw</code>.</li>
+      <li>Choose it below. The page checks that it's exactly the official V1.0.38 file, adds the P2 changes, checks the result, and saves <code>TD-H9-V1.0.38.P2.fw</code>.</li>
+      <li>Flash that file as the firmware README describes.</li>
+    </ol>
+    <label class="pick">Choose TD-H9-V1.0.38.fw<input id="file" type="file" accept=".fw,application/octet-stream"></label>
+  </div>
+  <div class="box"><div id="out" class="muted">Waiting for a file.</div><div id="dl"></div></div>
+  <p class="muted">Flashing any firmware is at your own risk. Keep the official file: flashing it again returns the radio to stock.</p>
+</main>
+<script>
+const PATCH = {"name":"H9 OPS firmware P2","radio":"TIDRADIO TD-H9","base":"official TD-H9 firmware V1.0.38 (TD-H9-V1.0.38.fw)","input_size":897440,"input_sha256":"c4d0beb5281f3a06d7a56083e1744b925f78ff9917c8364e006418ff0bbd0cd6","output_name":"TD-H9-V1.0.38.P2.fw","output_sha256":"255c907b5a23228b2b8dffff4ebe0f3dbbea5eee55f772d944b890a7b3e50124","runs":[[0,"d67ac3a6"],[68,"d5ce"],[20992,"8cabf5aa"],[21024,"60628465"],[50470,"3af1c1"],[50632,"c3266d7a"],[350474,"cfd566ba"],[353996,"9740353a8786ad7da60259910bf96818c01e62984beda46d6397f5007da0c7fb9561f1524f538b29bf2248eba875f294b230e1bb535b4f539b36853f1e5e88d83388ead2ac561dca149986"],[354072,"da5e8f9ff444a1632d0d64e94b0f8e3b5fbe7cd95a5faa46b162f3e5b9c9a56873dc8f1e986cc0b310a3076ddcfc8e3eff7a7cd8a1e36ddb952a54a811a302fc2dc0e56991df36c277cce6920f698d3fd6febc333b582f5ecb2a185cf68358eed01342"],[402728,"3d"],[402730,"3513480e62c0ba4092d960add5b9fc04c627646c2271ebc1bc4fa255b9436d5f3713fdd3ae4c7bac3ed3d8b40abb9b83586b4de3a8ef5b93260eda31b94e17337410fbe2a6e80b2aae8ce8c5796c375c9d0f962c9b6ef15dc48ca0548306547ff2db8f034bf92d0a7a6a8b126268b4aa360f"],[402846,"1995f90be44cf690f49e2d83eec19acb69f16d6408e885239693d9cfb11d448ca133098b8648605003416d5b0e8cfb41ff6b5b7dd25f8ce4b0cda3375f665a3cd9b41156a3a0f11153e8ac7b7635d3e6bc1751a6cc605433d2cbe8d68cc426ec5352d1cdc21c10f00686659d5302f5d6b083f9ea2d0475e8c4713bc72fa7f13af03dc2cf4c4d9aed4b16fb8993db20e3fe16fe719ed65e7d92cde277496b3842e84913eb170c593101ef0508c9ccc4894aeb1c6601534760172059209453cc39c821d933de0f8c9d7b450499e96104898ba79c9b1223583d22dca850918b6c6ad0e4f154796664"],[403078,"079df650502326b7b74bd70e7f32953ea514558a4ce7045660a3b0f21158d831fb44f459e940674e079bcf34a0f57be01bbd2cda6e4824776866c44739e629eec7f99ca613034e4e391c66b3098ba74cb93367924b48eed88063b14de7ace80682ea0e185123ce6f3393ae319bb7e6399bb3cee1193a7ce8333c591d448c5b38bcec038e7d25e495c428f927057799fda56f8fff077ee49ed32151f236e400534b3f945b605079a796bea1163b0af94b8783d4463394b1edf33fdb1f06f4049703fe3ae83098991e76041416ffeadcb9a0394c8751a6f5db218563db3648a9828b027e4ab29cc1a700a74b12d0daaab970e3e55494732301f099215dc48ca1727125b651204592ca043d31f8df153066092c1beb040a9fe53360aad17465faf004268ef4e17090cebf5c3b891f643c3aaf2770dee3c23d4f2087a32db62d08152284841cb2b9420d1835e22e0d31eae118eef85da977d35991"],[403424,"06c324a59f21a91aaeb912e9f3c435a94bec3d7859c81bd0b267d24a85"],[403454,"4582c2dc86321a11ba617e1a01485cdac7aa7c461f2ade61a94cbb73fe1f951ff43b9b9b042d673160e7f329d14f6aea26364e6b464ba549af91331deedb2f377c2db3a224a469f07c1a2d2094278f4693184eb969e6ff03e2a6e2d281fe3ccfcc8c1bef28441811c0f9cc8751a676d883da43c20b216732909c4ba0e736b44f160d6343468c0815c0f9cc87518715374d671b99267d6e7324dc75239451bd65950f133a74349c973a655c1aec6d01c65ee4d7907fdbe682c9d37630b5e4dc8daff78ea9a594dbeec3b80e3903693f1cc96f2afbe2f05f10e07526c51332cdbb9451c993a64cdaf1b305d4d763a58ce4111164acfb575fe00d7915d67ffe97aab76e0383c68cdbeec3b80e3948a47b0bf786831024b4968451a7166d3c011d0457aa195d54cd9af900065ed740c5b8592c4c3162d48c5025e298de9c11328775f4d45383452ea7fbb6accfc6b25acab16287ca11d8851310950e758bbb622e2555b55b9374a2aa306923b67920de72d361ca08048000209ad8ca7d85151477eafd8bf11bf5c6d8eec3b80e397a862b8fc3491b68eec3f8f4e09101db40c67d8534776bf367a958eef3c60c3933251b557497d3b7cd416ec7cbf46a5459ec255b15f167c746f3c80b0206ddd57ede5bd96af8ea1de7e50b69fc63f3c57aba8517b4807fc367b358af01061d5cb22f5efbe98e227a8a3152c28e570b584d62122e54508425c6ced8fbdca9af34fd94f593396da44c207a72219063a0184e46fc12460a89cb62c85bee97fd8adfdc38952c1215be6bbbd541b2620fb7fcebaf419d65efa94906f41b15bccd61219999a8c48325b7381d99"],[404053,"48a007d3fec2ba2b73c6769517a7b4851703db74da2559d6f02e5f971ffc831b2d244cbdfbe434a04b1f0f609cd68c1011c1d8ae609f3a1ccd49a294b2a84242206a733ac11038c63954b26999d275ef15c7d88f609f3a3c85239ecff33a888acd43226c787000218206eed9664e40482bcb6aaa214d2054aa350aa1eb0c6763666d03b0cf58cb2dad67ed9933060dc8fc594f30995cc5e553366eecbb301dfb774778584649b891e3866e"],[404225,"2286ec0c8213392d3e605c3088e6b1ad81adc9e44933a7e7387eb791f4e410ecb526ed5056c2452ffe741f32af82316e688bf43c46d3e3da099adc568204c851f3ce49583153ca34d6fc79"],[404301,"4684fe9be0259e9d8aff2a9cbc8d8e5d56e46966791cc99c924307afbe741ec403cfc2af290d1e057a965555ff31a9330294dfe11bce8edbee2f328adffe98a0a9c0780104a163bea9983ec43326ec2132057529f5aef54871d94558c8e7fe202df2"],[404400,"77b54b5f5d9c"],[404407,"9168a934e141c2ef0abd4226a89afbca76d79edc99de82c662f5335daacc4d6022cc075ddcf932bd6bc3cc8ccdd828"],[404455,"31ed344e1bf3155e08766e6e2e27c315d8f75ba6997d5f8fea641eaf8d762cea260b82359e52207116e0a013f5136e8fec9faa445dd40d2b83ecee8fcd61ccea260b82359e52013392239271314f5ced2836d9a2914c3d4b4309ddef0d39cfea260b82359e7362f51e07c1d77dd20f4b45ec4c88c5e46deb222ccdcf4ddccfea260b82359e7343b79a59f0b5b9003e2981453f6e097c5d8be2571e2c8d646ce926ed8235bff6a47927dfc498c4300a259fbc66dc6d7ecd8ae0"],[405128,"7d00"],[405132,"c7"],[405134,"613a"],[405470,"2a"],[405472,"4cb2"],[413089,"49"],[432424,"a64c9811"],[445358,"1d738cd9"],[447639,"0d"],[447703,"bc"],[447891,"19"],[477122,"1a208e78"],[477236,"ecb0f4eb5489"],[477622,"8e55ec1c9b36"],[481698,"25"],[481700,"9d5f"],[493382,"6e95371c7cd9"],[493956,"8c"],[493958,"c72f"],[494448,"3e143f2574c9"],[525972,"61f775274d9a"],[527008,"28"],[527010,"6628"],[570766,"62acf764"],[570964,"b1"],[570966,"3e3b"],[580614,"17"],[580616,"a1ea"],[583944,"3939b7ff"],[707312,"24"],[707314,"e804c764151d5c9e3c80d7aec455c388db81fdcde4ded1ac3494f6"],[707342,"2a8c93d25fe2076b85ee2f1d1d1d99b08e2f88b3ac68e8671c2c6807442b67849abf230caacd4b80e78b166ea65a5dc3c655c2ae6417c789d9"],[707400,"c92c070aad487801f2f111bcb67a13822c5972fe2b"],[707422,"6772dbb2068aeb67fa77b778d56244c506b4590171afd31c2174f45614c172d3c72cb12ff27f"],[707461,"67d13a5996b8c1ee6223f7a2b9b2d5d8308396333ce5"],[707484,"39ed850ed39217d355c720774b6a149f37cabc79133caf"],[707508,"56105eb833c27d6a5b3a678932"],[707522,"6555d48d7011f3d25711ecce9211d79f433dad"],[707542,"7a6ba875aaf4b373d557feb8ffe8d4751e8073d307d757a87887a244b97797439a07432a8ee01001674583fa246f96a51a308a"],[707594,"b6d6b872856a346b0c446a81c1"],[707608,"23c105dd304f03a589ee043b16ad9a348a"],[707626,"e672bb53bd4eafa3b326e2f3e219c0303252322120"],[707648,"e1e265eb946daa37915d56ee1ac8568046e85224b90df6ae9ae933404b"],[707678,"93bd183294476aa6cbd8798e65249031c0"],[707696,"dc2373e4383e9c75328ac5a89001de8d4416b52015"],[707718,"9a8a4bb35cad690ec8f16dedde6130f191149f7bb5"],[707740,"285122656bb235288e632a16cb4b71efb937cd3b87710e7f388cd896e7"],[707770,"403a41a193490d493407e6b019dc4193a5"],[707788,"0aae48b3b720a02c80cf6edf7edd479ecda5e23c3f7c45575481e4dee18c9807bdab4abb6e5e39"],[707828,"9b2de63a66b24e5960839a40e9c0360b75ec0371e0f0f9642e6de57bb0c3b724da3f8f2929505e447afc1e2a6dcf85d37383d9"],[707880,"d90d458e7f7a0c2ebbf33d4dde"],[707894,"a3df0f1c1a1023"],[707902,"30be53a2d78bd27108368a"],[707914,"c7301e38cca2aaa59b02f7700f2994add3"],[707932,"499028619b"],[707938,"c715548d5915f45999cce2f33d3938ecbd6cc62714"],[707960,"fd44f6e890817ae1f33aa321ecce98cc4a077dedfdbfbcf91326b512f28c005947d3766de05f30b50342fea112ad9e14f4594ee76e45b64b52"],[708020,"7eddb288eac4c0a0f89c5ee231c88c61a49b8922683dcf564c7438f1cbc0db6554983d9e7265bbf5d63ff314eae4e42a16ac2bd5b1dc35b9cd8b2bceaee3815745bf8a3c1b3c9c39b0da552203b92f7d669b73b01ac6335691adeb3f8a2dd2d3bbf5d61eb1b1ddab6b70151b3b5ec6"],[708132,"86971b34383d905b42"],[708142,"293f6e09386102c948a52af42871caa6887511cb61fbfc09edae30f420408d02caade8449e2daa68c7ba835f72c45a91dcb1993145b6d68d60308a4f60a1a2c211aa37ea10"],[708212,"893b641d9d2a71fff4b27f866356f585960d56b5a9c4c080d2256bbe5a1daafd5c30e1182feacd0c9d14f478271545cad70d13d5694029992c8f2392e76c12c886eee147d61c3e5091113043bf66e9efd2891e3a66c1a163e7eff0e1de9e307dd8ac47ad5c9f0517284b992db873d4a550850a2a79c1ae7ee2c4a973dfa652a9408d367ef1f0edc8bd65ebffd898276fde860934f6d28102d42b58a4a8b357a7a6bf4597ff3d56dd4257b937cb91392b468e5c3476d3d102280b4a2078834563c68c395367"],[708410,"68af2065f39790423de957611b3478c661e3336b978f8d32872e7f3edb3cfcd932bc8b2143111182c5ab05dc3a6009b9ed027712b46e188e918e85eeae8ebac93f89416d442495c2f603b9ff6e511ad0d24b29df2ef05901cbdf420a86858787e6beaefa493fe985ec4f338d4d5d0cb5aa2315ef797f0217d937c12c90732cef77210cca38f9908ee5adb7fe6e34a17842cbac3668551bd5f2d5c41be09d51cc2aca063e33f5ad93b7ca3bec3a7cac61fbe7d6cec5786547a84595643bfb5e07a0b93a013b4f6dc6946b062cca8eb84f334458aed083d58ac18d03b64f6de1479ead66b92e8c95c2b0fbe25da1e4dd215f1435e1fd86dca4a27b7ad67cc5dce41820922c9f1dc0a0b46b06331a670b908ce9fd37e87a5a6a98e87c6279754571ac8a999a8f91196126c338e8765868a787a8875382fd5e3ad828f53424b5ef766b293da8fc50402ea539152c6a5d0c9ee2b3aff866500fb85b9061f004afd35bfa28d523ee3f673df74637e17f343e948e8aa9d04be107899f87baf7255977493e816f02818b312c8a99bbec76343a90928c8fb38ddbef2abc00d7211bd52e05db3532b7af269a927c2cb635bdd4d05b025c6a17773ebf27a77c18484b43de477ca1a107cfe6da629dea36358fd4d045c366b598d0d8636098e407761a5bd65f4c4e3b7b38ee2c92447b04dea486ba05c3c75c6b21c49bd430d40685df4f9cac400006d6958ae88224bb84de1a7538a390a65e2ec1059ce2b682bac917918d86f2c47b04de3b14c731c476cc4a663bf182d67f28d6818cb6f32fbe2580d6f52ed4f12786547b817a0f8b6e38fa8cca117b206edd6803f144"],[716960,"b7136c0bff153d88e0192599b963ada8b4dba191b343ed09bc5d8bc31e0b5c6bf5230ccb7a2b3d88eb272599ed006b2482b607dd702c4864cbcaa2970665fc0a2e0d2c8b16153d881d1925990a1f29a083bb6619731f29a03fb9445be3559ccacafdcc4b17153d88801904fad3f1d57f3ca67a06e52155584078c65f4064fe0eafedec0b0f153d88741807fa25d194fb"],[717105,"9718c2aaef379c21f4209323ab9ece61228ccbdc143e880ae604fab34d52779f3bbe8e41bc91f18a610ac7d9fb3eafd2ccaf8b49ea3d8876e604fa7c6c10f3530adc4a348df335e512ec0b9a355d6fd5424c4b78ea3d88d2e604db618bde4e889cf2376a1bfc2bbab55d6fa99f5f6db75b6c0b552e3d885f2204dbe36e9cca156890f3db219eefc4c7bba3eaaf3fade9a60ccb142e3d88992204db070d5a46133b36bfb9bc3882245291f714339fcc9f7a2c8bc1e23d8831ef04dba6e118c285c7547bc5405a468421773b6b02ff0cd28bcc4bdfc25e6fa031b8a3d6209ac62895d150438fc47ac1b251567ed57012579bec0bdcc25e6f2831b8a34402d84297a7b39415bda6be18c1b79a1fe610d2a4a88ccbf6c15e6f9332b8a339611eced6f415d8c5ee00d3d7549dceb7b6b0b31bb8ac8ba5c15e6f4032b8a3cf405c4a0fc5771c4ddf62174c277b022f86d07364c84c4b66c15e6f0332b882e8a792f71052596196486d097a7ec966c417d1718fd96c0b7ec05e6fb133b8829387d07324623ba58b780fcdcd0d2faab60cb2b15dc20fcb4deb5d6fd819bb8237ce15ffc11b9ee9f801aaa0574605febe5d12d00e0f2f8b89365d6f1fc5bb82f633577b03f6fc2d83ecc86424e9e33293b172103dffcf4baa355d6fecc69ae1fadfa8a418eae3321dd1b49c5b2b6136188310d4b5ecef0bb6355d6f46c69ae160feea20eadb81f673e0d658525887fa3eb3701425dc8fcb4b355d6fd7c79ae196e7c2bb6ee00b"],[717652,"2e71983426d380535f2d7d54a1af857636fbf74e34d8647120"],[717678,"849371c73662fbbab2b07a80ede2df2ca78b165b4d2ada2b76"],[717704,"dc0272c1c00509b42fb99c22fd85e7ecf61803ff0cbd18971e45f65c115d77"],[717736,"dc0272c1a312b5facbf98ca6d845784ab4"],[717754,"f571940d296b84a3cd8a2d0baeeff6398dfe54fe99986036419c321f75bb9a6f1a"],[717788,"5ee19917bed2c363333b6f80ccbfa82ff241f399e69b606e28d833048ef026532e91f9ff49e2314a745ff77805849130f172799b0666da6d3d77c2566f6dd26b082b1f5e295cfd35c51540e15b81e4a28d"],[717870,"b3390c1c2017aac53135c30bfc"],[717884,"77b13d7e5102fd8cec4fe7804f9593de7bd8d5eb374d22f7752109081b4bd7195e4921f549e9409c300c0a84ec0113622dc2b6996d68ad57f330d130425eb52345670135a9a2"],[755352,"7bee8bdd9d"],[755360,"a9884168f7"],[755368,"cf64b8bb51"],[755376,"1bac28ba72"],[755384,"129e6d1105"],[755392,"f1b821a877"],[755400,"8f64b8bb70"],[755408,"62ff8ef6cb"],[755416,"880b4745ad"],[755784,"7f01f51e39"],[755792,"544e6b0303"],[755800,"5eb3b0b56f"],[755808,"edac8ee8f4"],[755816,"cf00f51e39"],[755824,"cc7e09c78b"],[755832,"67c15679f7"],[755840,"45dd6e2874"],[755848,"5f00f53f5a"],[756648,"20e71ac08a"],[756656,"10c77b022f"],[756664,"62e333b36c"],[756672,"0d7d2ea87b"],[756680,"a0d81ac0ab"],[756688,"a9abdd4e96"],[756696,"384919e7c4"],[756704,"85520ee8fb"],[756712,"20d81ac0ab"],[765945,"47"],[765949,"a7"],[765953,"b96c36c414689b0a81f7487e89102061f8c6af7be0cdb87fa24bb8cb88fe75b9136dc71be24368a648b162d2a95ea77ed21f01ec511f7eb7737332c26a832311"],[766018,"5fa950"],[766022,"71"],[766024,"a760a17be571fc37c631036ce45d4f389e4b90"],[766044,"409621521b2b6452babbff62a5011faba3c16caf"],[766066,"60ebc2af6acc"],[766073,"395fecd8ba418021c284"],[766084,"7aa4c7dfa44ab1c2860f301581274f32113260c93362c5261d204280aa52a741c22069d00a40"],[766123,"53"],[766125,"a9"],[766127,"97a51c2c529086"],[766135,"0e3111224488"],[766142,"204031"],[766146,"c4a952"],[766150,"69d2a4"],[766154,"b1"],[766156,"a7"],[766158,"9c193245"],[766163,"142850"],[766167,"61"],[766169,"84"],[766171,"102040"],[766175,"213972"],[766179,"e9d2"],[891170,"27c94f37"],[891202,"311568a64944d8c3fe84599fcab39a61bc743d3a263171366f221a4986a13af0"]]};
+
+// SHA-256, so the page needs no network and no special browser features.
+function sha256(bytes) {
+  const K = new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+  const H = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+  const len = bytes.length, total = Math.ceil((len + 9) / 64) * 64;
+  const m = new Uint8Array(total); m.set(bytes); m[len] = 0x80;
+  const dv = new DataView(m.buffer);
+  dv.setUint32(total - 8, Math.floor(len / 0x20000000)); dv.setUint32(total - 4, (len * 8) >>> 0);
+  const W = new Uint32Array(64);
+  const r = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let off = 0; off < total; off += 64) {
+    for (let i = 0; i < 16; i++) W[i] = dv.getUint32(off + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = r(W[i-15], 7) ^ r(W[i-15], 18) ^ (W[i-15] >>> 3), s1 = r(W[i-2], 17) ^ r(W[i-2], 19) ^ (W[i-2] >>> 10);
+      W[i] = (W[i-16] + s0 + W[i-7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + W[i]) >>> 0;
+      const t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    H[0] += a; H[1] += b; H[2] += c; H[3] += d; H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+  }
+  return Array.from(H, (x) => x.toString(16).padStart(8, "0")).join("");
+}
+
+// Returns {ok, text, data}. Shared with the test script.
+function makeP2(input) {
+  if (input.length !== PATCH.input_size || sha256(input) !== PATCH.input_sha256) {
+    return { ok: false, text: "This isn't the official TD-H9 V1.0.38 firmware (its size or SHA-256 is different).\n" +
+      "Expected SHA-256 " + PATCH.input_sha256 + "\nNothing was made. If TIDRADIO only offers a newer version, ask for P2 (see the firmware README)." };
+  }
+  const out = new Uint8Array(input);
+  for (const [offset, hex] of PATCH.runs) {
+    for (let i = 0; i < hex.length; i += 2) out[offset + i / 2] = parseInt(hex.substr(i, 2), 16);
+  }
+  if (sha256(out) !== PATCH.output_sha256) return { ok: false, text: "The result didn't come out as expected. Nothing was made." };
+  return { ok: true, text: "Official V1.0.38 file: verified.\nP2 made and verified.\nSHA-256 " + PATCH.output_sha256, data: out };
+}
+
+if (typeof document !== "undefined") {
+  document.getElementById("file").addEventListener("change", async (ev) => {
+    const f = ev.target.files[0], out = document.getElementById("out"), dl = document.getElementById("dl");
+    dl.replaceChildren();
+    if (!f) return;
+    out.className = "muted"; out.textContent = "Checking " + f.name + "…";
+    const res = makeP2(new Uint8Array(await f.arrayBuffer()));
+    out.className = res.ok ? "ok" : "bad";
+    out.textContent = res.text;
+    if (res.ok) {
+      const a = document.createElement("a");
+      a.className = "button"; a.textContent = "Save " + PATCH.output_name;
+      a.download = PATCH.output_name;
+      a.href = URL.createObjectURL(new Blob([res.data], { type: "application/octet-stream" }));
+      dl.append(a);
+      a.click();
+    }
+  });
+}
+if (typeof module !== "undefined") module.exports = { makeP2, sha256 };
+</script>
+</body>
+</html>

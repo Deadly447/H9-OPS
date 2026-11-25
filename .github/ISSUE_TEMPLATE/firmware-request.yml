@@ -1,0 +1,36 @@
+name: Firmware request (P2)
+description: Ask for H9 OPS firmware P2, if the patcher won't work for you.
+title: "Firmware request: "
+labels: ["firmware request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most people can make P2 themselves from TIDRADIO's official V1.0.38 file:
+        see [firmware/README.md](https://github.com/Deadly447/H9-OPS/blob/main/firmware/README.md).
+        Use this form if that doesn't work for you, and I'll get the firmware to you directly.
+
+        **This issue is public.** Don't post an email address or phone number here:
+        I'll reply in the issue and we'll sort out how to send it.
+  - type: dropdown
+    id: why
+    attributes:
+      label: Why do you need it sent?
+      options:
+        - TIDRADIO only offers a newer firmware than V1.0.38
+        - The patcher refused my V1.0.38 file
+        - I can't run the patcher (no computer, etc.)
+        - Something else (below)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Firmware on your radio now
+      description: Menu → Radio Info (or "don't know")
+      placeholder: V1.0.38
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: How you'll use it, what went wrong, and so on. No contact details here, please.
