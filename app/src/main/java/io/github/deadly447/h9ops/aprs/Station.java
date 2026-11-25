@@ -9,6 +9,8 @@ public final class Station {
 
     public final String name;
     public long firstHeard, lastHeard;
+    /** When it was heard before the latest packet (0 = never): for "heard again" alerts. */
+    public long prevHeard;
     public int count;
     public AprsPacket last;          // most recent packet of any kind
     public AprsPacket lastPosition;  // most recent packet with a position
@@ -54,6 +56,7 @@ public final class Station {
     void add(long now, AprsPacket p) {
         if (count == 0) firstHeard = now;
         count++;
+        prevHeard = lastHeard;
         lastHeard = now;
         last = p;
         lastVia = p.heardVia;
@@ -72,6 +75,7 @@ public final class Station {
     /** A position this station sent us by message (PositionShare). Kept if it is the newest. */
     void sharedPosition(long t, AprsPacket p) {
         if (count == 0) firstHeard = t;
+        if (p.type == AprsPacket.Type.OBJECT || p.type == AprsPacket.Type.ITEM) object = true;
         if (t >= lastPositionTime) { lastPosition = p; lastPositionTime = t; }
         if (t > lastHeard) lastHeard = t;
         if (last == null) last = p;

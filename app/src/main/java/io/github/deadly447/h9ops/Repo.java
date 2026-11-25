@@ -29,6 +29,9 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import io.github.deadly447.h9ops.aprs.AprsPacket;
+import io.github.deadly447.h9ops.aprs.Alerts;
+import io.github.deadly447.h9ops.aprs.Broadcasts;
+import io.github.deadly447.h9ops.aprs.BulletinBoard;
 import io.github.deadly447.h9ops.aprs.AutoPosition;
 import io.github.deadly447.h9ops.aprs.Ax25;
 import io.github.deadly447.h9ops.aprs.Messenger;
@@ -66,10 +69,12 @@ public final class Repo {
     }
 
     static final String MSG_CHANNEL = "messages";
+    static final String ALERT_CHANNEL = "alerts", EMERGENCY_CHANNEL = "emergency";
     private static final String LOG_FILE = "packets.log";
     private static final String MSG_FILE = "messages.txt";
     private static final long TICK_MS = 1000;
-    private static final int KEEP_FILE_LINES = StationStore.KEEP_LOG;
+    /** Lines kept in packets.log by 1.25 and older (moved into the history database once). */
+    private static final int OLD_LOG_LINES = StationStore.KEEP_LOG * 2;
 
     private final Context ctx;
     private final SharedPreferences prefs;
@@ -79,7 +84,8 @@ public final class Repo {
     public final StationStore store = new StationStore();
     private State state = State.STOPPED;
     private String stateText = "Not connected";
-    private int linesInFile;
+    /** Every packet heard in the last 30 days (the station list keeps the newest 1000). */
+    private final History history;
     private Transmitter transmitter;
     public final Messenger messenger;
     /** Developer log (Settings → Developer mode). */
@@ -107,14 +113,24 @@ public final class Repo {
             return transmitter.transmit(ax25);
         });
         messenger.setEvents(w -> dev.log("MSG", w));
+        history = new History(ctx);
         load();
         loadMessages();
         loadAuto();
+        loadAlerts();
+        loadBroadcasts();
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = ctx.getSystemService(NotificationManager.class);
             if (nm != null) {
                 nm.createNotificationChannel(new NotificationChannel(MSG_CHANNEL, "Messages",
                         NotificationManager.IMPORTANCE_HIGH));
+                nm.createNotificationChannel(new NotificationChannel(ALERT_CHANNEL, "Alerts",
+                        NotificationManager.IMPORTANCE_HIGH));
+                NotificationChannel em = new NotificationChannel(EMERGENCY_CHANNEL, "Emergency packets",
+                        NotificationManager.IMPORTANCE_HIGH);
+                em.enableVibration(true);
+                em.setVibrationPattern(new long[]{0, 600, 200, 600, 200, 600});
+                nm.createNotificationChannel(em);
             }
         }
         main.postDelayed(ticker, TICK_MS);
@@ -122,7 +138,9 @@ public final class Repo {
 
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
-            if (messenger.tick(System.currentTimeMillis())) messagesChanged();
+            long now = System.currentTimeMillis();
+            if (messenger.tick(now)) messagesChanged();
+            sendBroadcasts(now);
             main.postDelayed(this, TICK_MS);
         }
     };
@@ -318,10 +336,11 @@ public final class Repo {
     }
 
     /** Starts sending my position to {@code peer}; the first one goes out straight away. */
-    public String startAuto(String peer, int minutes, PositionShare.Blur blur, int stopHours) {
+    public String startAuto(String peer, int minutes, io.github.deadly447.h9ops.aprs.SmartBeacon.Profile smart,
+                            PositionShare.Blur blur, int stopHours) {
         if (myCall() == null) return "Set your callsign first";
-        auto.start(peer, minutes, blur, stopHours, System.currentTimeMillis());
-        dev.log("POS", "timed position to " + peer + " started: every " + minutes + " min, " + blur.label
+        AutoPosition.Plan plan = auto.start(peer, minutes, smart, blur, stopHours, System.currentTimeMillis());
+        dev.log("POS", "timed position to " + peer + " started: " + plan.label() + ", " + blur.label
                 + (stopHours > 0 ? ", stops after " + stopHours + " h" : ", no stop time"));
         saveAuto();
         changed();
@@ -350,6 +369,22 @@ public final class Repo {
         dev.log("POS", "timed position to " + plan.peer + (err != null ? " not sent: " + err : " handed to messaging (" + plan.blur.label + ")"));
         saveAuto();
         changed();
+    }
+
+    /** A GPS check for a smart plan: sent only if SmartBeacon says it's time. */
+    void smartFix(AutoPosition.Plan plan, double lat, double lon, long fixTime, double speedMps, double courseDeg) {
+        long now = System.currentTimeMillis();
+        String why = plan.smart.check(lat, lon, fixTime, speedMps, courseDeg, plan.lastSent, now);
+        String speed = Math.round(plan.smart.mph()) + " mph";
+        if (why == null) {
+            auto.checked(plan, now);
+            dev.log("POS", "smart position to " + plan.peer + ": " + speed + ", not sending yet");
+            changed();
+            return;
+        }
+        dev.log("POS", "smart position to " + plan.peer + ": " + speed + ", sending (" + why + ")");
+        sendAuto(plan, lat, lon, fixTime);
+        if (plan.problem == null) plan.smart.sent();
     }
 
     void autoFailed(AutoPosition.Plan plan, String why) {
@@ -463,7 +498,13 @@ public final class Repo {
         String who = m.from();
         store.addShared(m.time, PositionShare.toPacket(who, pos,
                 who + " (position by message)"));
-        if (live) tracks.seen(m.time, who, pos.lat, pos.lon, pos.blur != PositionShare.Blur.EXACT);
+        if (live) {
+            tracks.seen(m.time, who, pos.lat, pos.lon, pos.blur != PositionShare.Blur.EXACT);
+            Station s = store.get(who);
+            if (s != null && s.lastPosition != null && s.lastPosition.shared) {
+                for (Alerts.Alert a : alerts.check(s.lastPosition, 0, m.time)) notifyAlert(a, m.time);
+            }
+        }
     }
 
     private void applySharedPositions(String peer) {
@@ -614,15 +655,197 @@ public final class Repo {
         changed();
     }
 
+    // ---- alerts ----
+    public final Alerts alerts = new Alerts();
+
+    private void loadAlerts() {
+        alerts.setWatch(Alerts.parseCalls(prefs.getString("alert_watch", "")));
+        alerts.setEmergency(prefs.getBoolean("alert_emergency", true));
+        List<Alerts.Area> areas = new ArrayList<>();
+        for (String l : prefs.getString("alert_areas", "").split("\n")) {
+            Alerts.Area a = l.isEmpty() ? null : Alerts.Area.load(l);
+            if (a != null) areas.add(a);
+        }
+        alerts.setAreas(areas);
+        alerts.prime(store.stations());
+    }
+
+    /** Saves the alert settings; returns an error to show, or null. */
+    public String setAlerts(String watchText, boolean emergency) {
+        List<String> w = Alerts.parseCalls(watchText);
+        prefs.edit().putString("alert_watch", String.join(" ", w)).putBoolean("alert_emergency", emergency).apply();
+        alerts.setWatch(w);
+        alerts.setEmergency(emergency);
+        dev.log("ALERT", "settings: " + w.size() + " callsign(s) watched, emergency alerts " + (emergency ? "on" : "off"));
+        changed();
+        return null;
+    }
+
+    /** Adds (or replaces, by name) an alert area. */
+    public void putAlertArea(Alerts.Area a) {
+        List<Alerts.Area> l = alerts.areas();
+        l.removeIf(x -> x.name.equalsIgnoreCase(a.name));
+        l.add(a);
+        saveAreas(l);
+        dev.log("ALERT", "area \"" + a.name + "\" set, " + (a.calls.isEmpty() ? "any station" : a.calls.size() + " callsign(s)"));
+    }
+
+    public void removeAlertArea(String name) {
+        List<Alerts.Area> l = alerts.areas();
+        l.removeIf(x -> x.name.equalsIgnoreCase(name));
+        saveAreas(l);
+    }
+
+    private void saveAreas(List<Alerts.Area> l) {
+        List<String> lines = new ArrayList<>();
+        for (Alerts.Area a : l) lines.add(a.save());
+        prefs.edit().putString("alert_areas", String.join("\n", lines)).apply();
+        alerts.setAreas(l);
+        alerts.prime(store.stations());
+        changed();
+    }
+
+    private void notifyAlert(Alerts.Alert a, long now) {
+        dev.log("ALERT", a.kind.name().toLowerCase(java.util.Locale.US) + " " + a.call + (a.area != null ? " (area \"" + a.area + "\")" : ""));
+        NotificationManager nm = ctx.getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        boolean em = a.kind == Alerts.Kind.EMERGENCY;
+        String channel = em ? EMERGENCY_CHANNEL : ALERT_CHANNEL;
+        Intent open = new Intent(ctx, MainActivity.class)
+                .putExtra(MainActivity.EXTRA_STATION, a.call)
+                .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent pi = PendingIntent.getActivity(ctx, ("alert" + a.call).hashCode(), open,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        // the lock screen only says that there is one, not who or where
+        Notification pub = (Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(ctx, channel) : new Notification.Builder(ctx))
+                .setSmallIcon(em ? android.R.drawable.stat_sys_warning : android.R.drawable.stat_notify_more)
+                .setContentTitle(em ? "APRS emergency" : "APRS alert")
+                .build();
+        Notification n = (Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(ctx, channel) : new Notification.Builder(ctx))
+                .setSmallIcon(em ? android.R.drawable.stat_sys_warning : android.R.drawable.stat_notify_more)
+                .setContentTitle(a.title())
+                .setContentText(a.detail)
+                .setStyle(new Notification.BigTextStyle().bigText(a.detail))
+                .setWhen(now)
+                .setShowWhen(true)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setPublicVersion(pub)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .build();
+        try {
+            nm.notify(a.call + "|" + a.kind + (a.area == null ? "" : "|" + a.area), 3, n);
+        } catch (SecurityException ignored) {
+            // notifications not allowed
+        }
+    }
+
+    // ---- objects and bulletins we keep on the air ----
+    public final Broadcasts broadcasts = new Broadcasts();
+    public final BulletinBoard board = new BulletinBoard();
+
+    private void loadBroadcasts() {
+        String s = prefs.getString("broadcasts", "");
+        broadcasts.load(s.isEmpty() ? new ArrayList<>() : Arrays.asList(s.split("\n")), System.currentTimeMillis());
+    }
+
+    private void saveBroadcasts() {
+        prefs.edit().putString("broadcasts", String.join("\n", broadcasts.save())).apply();
+    }
+
+    /** Places (or moves) an object; it goes out at once and every few minutes. Returns an error, or null. */
+    public String placeObject(String name, double lat, double lon, char table, char code, String comment, int minutes) {
+        if (myCall() == null) return "Set your callsign in Settings first";
+        try {
+            Broadcasts.Obj o = broadcasts.putObject(name, lat, lon, table, code, comment, minutes, System.currentTimeMillis());
+            dev.log("OBJ", "placed \"" + o.name + "\", sent every " + o.minutes + " min");
+        } catch (IllegalArgumentException e) {
+            return e.getMessage();
+        }
+        saveBroadcasts();
+        sendBroadcasts(System.currentTimeMillis());
+        changed();
+        return null;
+    }
+
+    public void removeObject(String name) {
+        if (!broadcasts.removeObject(name, System.currentTimeMillis())) return;
+        dev.log("OBJ", "removing \"" + name + "\" (3 killed sends)");
+        saveBroadcasts();
+        sendBroadcasts(System.currentTimeMillis());
+        changed();
+    }
+
+    /** Sends a bulletin now and every 10 minutes for {@code hours}. Returns an error, or null. */
+    public String sendBulletin(String line, String text, int hours) {
+        String me = myCall();
+        if (me == null) return "Set your callsign in Settings first";
+        try {
+            Broadcasts.Bln b = broadcasts.sendBulletin(line, text, hours, System.currentTimeMillis());
+            dev.log("BLN", "sending " + b.addressee() + (hours > 0 ? " every 10 min for " + hours + " h" : " once"));
+        } catch (IllegalArgumentException e) {
+            return e.getMessage();
+        }
+        saveBroadcasts();
+        sendBroadcasts(System.currentTimeMillis());
+        changed();
+        return null;
+    }
+
+    public void stopBulletin(String line) {
+        broadcasts.stopBulletin(line);
+        saveBroadcasts();
+        changed();
+    }
+
+    /** Sends whatever objects and bulletins are due. Waits (keeps them due) while the radio can't send. */
+    private void sendBroadcasts(long now) {
+        String me = myCall();
+        if (transmitter == null || pinHold || me == null || broadcasts.msUntilNext(now) > 0) return;
+        List<String> due = broadcasts.due(now);
+        if (due.isEmpty()) return;
+        for (String info : due) {
+            byte[] frame;
+            try {
+                frame = Ax25.encode(me, Messenger.TOCALL, txPath(), info.getBytes(StandardCharsets.US_ASCII));
+            } catch (IllegalArgumentException e) {
+                dev.log("OBJ", "couldn't build a frame: " + e.getMessage());
+                continue;
+            }
+            boolean ok = transmitter.transmit(frame);
+            AprsPacket p = io.github.deadly447.h9ops.aprs.AprsParser.parse(Ax25.parse(frame));
+            if (p.type == AprsPacket.Type.OBJECT) {
+                p.mine = true;
+                store.addShared(now, p);             // on our own map and list (the radio doesn't hear itself)
+                dev.log("OBJ", (p.killed ? "sent removal of \"" : "sent \"") + p.name + "\"" + (ok ? "" : " (send failed)"));
+            } else if (p.type == AprsPacket.Type.MESSAGE && p.msgTo != null) {
+                board.addMine(me, p.msgTo.trim(), p.msgText, now);
+                dev.log("BLN", "sent " + p.msgTo.trim() + (ok ? "" : " (send failed)"));
+            }
+        }
+        saveBroadcasts();
+        changed();
+    }
+
     // ---- packets ----
     /** Records one AX.25 frame received from the radio. */
     public void addFrame(long now, byte[] ax25) {
         lastFrameAt = System.currentTimeMillis();
         AprsPacket p = store.add(now, ax25);
         if (p == null) return;
+        if (board.add(p, now)) dev.log("BLN", "bulletin " + p.msgTo.trim() + " from " + p.sender);
+        Station st = store.get(p.name == null || p.name.isEmpty() ? p.sender : p.name);
+        for (Alerts.Alert a : alerts.check(p, st == null ? 0 : st.prevHeard, now)) notifyAlert(a, now);
         if (p.hasPosition() && !p.killed) tracks.seen(now, p.name, p.lat, p.lon, p.ambiguity > 0);
-        final String line = now + "\t" + hex(ax25) + "\n";
-        io.execute(() -> append(line));
+        Station.Heard h = store.newest();
+        final boolean again = h != null && h.again;
+        io.execute(() -> {
+            try {
+                history.add(now, ax25, p, again);
+            } catch (RuntimeException e) {
+                dev.log("DB", "couldn't store a packet: " + e.getClass().getSimpleName());
+            }
+        });
         Messenger.Msg in = messenger.onPacket(p, now);
         if (in != null) {
             applySharedPosition(in, true);
@@ -634,21 +857,32 @@ public final class Repo {
 
     /**
      * Writes the packet log (oldest first) as text: local time, how it was heard, the
-     * packet in TNC2 form.
+     * packet in TNC2 form. {@code since} &lt; 0: the newest 1000 (what the Packets tab
+     * shows); otherwise everything in the history from that time on.
      */
-    public void exportPackets(java.io.OutputStream out, String header, java.util.function.Consumer<String> done) {
-        List<Station.Heard> l = store.log();
+    public void exportPackets(java.io.OutputStream out, String header, long since, java.util.function.Consumer<String> done) {
+        List<Station.Heard> l = since < 0 ? store.log() : null;
         io.execute(() -> {
             String err = null;
             java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US);
             try (java.io.Writer w = new java.io.OutputStreamWriter(out, java.nio.charset.StandardCharsets.UTF_8)) {
                 w.write(header);
                 w.write("# time\theard\tpacket\n");
-                for (int i = l.size() - 1; i >= 0; i--) {
-                    Station.Heard h = l.get(i);
-                    w.write(f.format(new java.util.Date(h.time)) + "\t"
-                            + h.packet.route() + (h.again ? " (again)" : "") + "\t"
-                            + h.packet.raw.replace('\n', ' ') + "\n");
+                if (l != null) {
+                    for (int i = l.size() - 1; i >= 0; i--) {
+                        Station.Heard h = l.get(i);
+                        w.write(f.format(new java.util.Date(h.time)) + "\t"
+                                + h.packet.route() + (h.again ? " (again)" : "") + "\t"
+                                + h.packet.raw.replace('\n', ' ') + "\n");
+                    }
+                } else {
+                    history.forEach(since, r -> {
+                        AprsPacket p = parse(r.frame);
+                        if (p == null) return;
+                        w.write(f.format(new java.util.Date(r.time)) + "\t"
+                                + p.route() + (r.again ? " (again)" : "") + "\t"
+                                + p.raw.replace('\n', ' ') + "\n");
+                    });
                 }
             } catch (java.io.IOException | RuntimeException e) {
                 err = e.getMessage() == null ? e.toString() : e.getMessage();
@@ -658,12 +892,96 @@ public final class Repo {
         });
     }
 
+    private static AprsPacket parse(byte[] frame) {
+        io.github.deadly447.h9ops.aprs.Ax25 f = io.github.deadly447.h9ops.aprs.Ax25.parse(frame);
+        return f == null ? null : io.github.deadly447.h9ops.aprs.AprsParser.parse(f);
+    }
+
+    // ---- history (read on the background thread, answered on the main thread) ----
+
+    /** {packets stored, oldest time} */
+    public void historySize(java.util.function.Consumer<long[]> done) {
+        io.execute(() -> {
+            long[] r;
+            try { r = history.size(); } catch (RuntimeException e) { r = new long[]{0, 0}; }
+            final long[] r2 = r;
+            main.post(() -> done.accept(r2));
+        });
+    }
+
+    /** Weather stations heard in the last 30 days, most recent first. */
+    public void weatherStations(java.util.function.Consumer<List<History.WxStation>> done) {
+        // positions from the station list, read here on the main thread (the list isn't thread-safe)
+        java.util.Map<String, double[]> pos = new java.util.HashMap<>();
+        for (Station st : store.stations()) {
+            if (st.lastPosition != null && st.lastPosition.hasPosition()) pos.put(st.name, new double[]{st.lastPosition.lat, st.lastPosition.lon});
+        }
+        io.execute(() -> {
+            List<History.WxStation> r;
+            try { r = history.weatherStations(System.currentTimeMillis() - History.KEEP_MS); }
+            catch (RuntimeException e) { r = new ArrayList<>(); }
+            for (History.WxStation w : r) w.place = placeOf(w.name, pos.get(w.name));
+            final List<History.WxStation> r2 = r;
+            main.post(() -> done.accept(r2));
+        });
+    }
+
+    // Town names come from the offline map file (its "places" layer). Background thread only.
+    private io.github.deadly447.h9ops.map.MapFile placesFile;
+    private io.github.deadly447.h9ops.map.Places places;
+    private long placesStamp;
+    private final java.util.Map<String, String> placeByStation = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** The town nearest a station's last position, from the offline map; null if unknown. */
+    private String placeOf(String name, double[] known) {
+        double lat = Double.NaN, lon = Double.NaN;
+        if (known != null) { lat = known[0]; lon = known[1]; }
+        else {
+            try {
+                for (byte[] f : history.latestFrames(name, 50)) {
+                    AprsPacket p = parse(f);
+                    if (p != null && p.hasPosition()) { lat = p.lat; lon = p.lon; break; }
+                }
+            } catch (RuntimeException ignored) { }
+        }
+        if (Double.isNaN(lat)) return placeByStation.get(name);
+        File mf = MapPane.mapFile(ctx);
+        try {
+            if (!mf.isFile()) return null;
+            if (places == null || placesStamp != mf.lastModified()) {
+                if (placesFile != null) try { placesFile.close(); } catch (IOException ignored) { }
+                placesFile = io.github.deadly447.h9ops.map.MapFile.open(mf);
+                places = new io.github.deadly447.h9ops.map.Places(placesFile);
+                placesStamp = mf.lastModified();
+            }
+            String town = places.near(lat, lon);
+            if (town != null) placeByStation.put(name, town);
+            return town;
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** The town last found for a weather station (by weatherStations), or null. */
+    public String placeName(String name) { return placeByStation.get(name); }
+
+    /** One station's weather reports from {@code since} on, oldest first. */
+    public void weather(String name, long since, java.util.function.Consumer<List<io.github.deadly447.h9ops.aprs.WxHistory.Sample>> done) {
+        io.execute(() -> {
+            List<io.github.deadly447.h9ops.aprs.WxHistory.Sample> r;
+            try { r = history.weather(name, since); } catch (RuntimeException e) { r = new ArrayList<>(); }
+            final List<io.github.deadly447.h9ops.aprs.WxHistory.Sample> r2 = r;
+            main.post(() -> done.accept(r2));
+        });
+    }
+
     public void clear() {
         store.clear();
+        board.clear();
         io.execute(() -> {
             //noinspection ResultOfMethodCallIgnored
             new File(ctx.getFilesDir(), LOG_FILE).delete();
-            linesInFile = 0;
+            try { history.clear(); } catch (RuntimeException e) { dev.log("DB", "couldn't clear: " + e.getClass().getSimpleName()); }
         });
         changed();
     }
@@ -682,61 +1000,63 @@ public final class Repo {
         for (Listener l : new ArrayList<>(listeners)) l.onRepoChanged();
     }
 
-    // ---- private file ----
+    // ---- packet history ----
+
+    /**
+     * Fills the station list from the history database (the newest 1000 packets).
+     * The first time 1.26 runs, the old packets.log is moved into the database.
+     */
     private void load() {
-        File f = new File(ctx.getFilesDir(), LOG_FILE);
-        if (!f.exists()) return;
+        long now = System.currentTimeMillis();
+        File old = new File(ctx.getFilesDir(), LOG_FILE);
+        try {
+            if (old.exists()) {
+                moveOldLog(old);
+            } else {
+                for (History.Row r : history.recent(StationStore.KEEP_LOG)) {
+                    try { store.add(r.time, r.frame); } catch (RuntimeException ignored) { /* damaged frame */ }
+                }
+            }
+        } catch (RuntimeException e) {
+            dev.log("DB", "couldn't read the packet history: " + e.getClass().getSimpleName());
+        }
+        io.execute(() -> {
+            try { history.prune(now); } catch (RuntimeException e) { dev.log("DB", "couldn't tidy the history: " + e.getClass().getSimpleName()); }
+        });
+    }
+
+    /** 1.25 and older kept packets in a text file: put them in the database, then delete it. */
+    private void moveOldLog(File f) {
         Deque<String> lines = new ArrayDeque<>();
         try (BufferedReader r = new BufferedReader(new FileReader(f))) {
             String l;
             while ((l = r.readLine()) != null) {
                 lines.addLast(l);
-                if (lines.size() > KEEP_FILE_LINES) lines.removeFirst();
+                if (lines.size() > OLD_LOG_LINES) lines.removeFirst();
             }
         } catch (IOException e) {
             return;
         }
+        List<History.Row> rows = new ArrayList<>();
+        List<AprsPacket> packets = new ArrayList<>();
         for (String l : lines) {
             int tab = l.indexOf('\t');
             if (tab <= 0) continue;
             try {
-                store.add(Long.parseLong(l.substring(0, tab)), unhex(l.substring(tab + 1)));
+                long t = Long.parseLong(l.substring(0, tab));
+                byte[] frame = unhex(l.substring(tab + 1));
+                AprsPacket p = store.add(t, frame);
+                Station.Heard h = store.newest();
+                rows.add(new History.Row(t, frame, p != null && h != null && h.again));
+                packets.add(p);
             } catch (RuntimeException ignored) {
                 // skip a damaged line
             }
         }
-        linesInFile = lines.size();
-    }
-
-    private void append(String line) {
-        File f = new File(ctx.getFilesDir(), LOG_FILE);
-        try (Writer w = new OutputStreamWriter(new FileOutputStream(f, true), StandardCharsets.US_ASCII)) {
-            w.write(line);
-        } catch (IOException ignored) {
-            return;
-        }
-        if (++linesInFile > KEEP_FILE_LINES * 2) trim(f);
-    }
-
-    /** Keeps the file from growing without limit: rewrite it with the newest lines. */
-    private void trim(File f) {
-        Deque<String> lines = new ArrayDeque<>();
-        try (BufferedReader r = new BufferedReader(new FileReader(f))) {
-            String l;
-            while ((l = r.readLine()) != null) {
-                lines.addLast(l);
-                if (lines.size() > KEEP_FILE_LINES) lines.removeFirst();
-            }
-        } catch (IOException e) {
-            return;
-        }
-        File tmp = new File(ctx.getFilesDir(), LOG_FILE + ".tmp");
-        try (Writer w = new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.US_ASCII)) {
-            for (String l : lines) w.write(l + "\n");
-        } catch (IOException e) {
-            return;
-        }
-        if (tmp.renameTo(f)) linesInFile = lines.size();
+        history.addAll(rows, packets);
+        //noinspection ResultOfMethodCallIgnored
+        f.delete();
+        dev.log("DB", "moved " + rows.size() + " packets from packets.log into the history database");
     }
 
     static String hex(byte[] b) {

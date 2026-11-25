@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0
+
+- **Map tab:** stations on an offline map (a Protomaps PMTiles file for your
+  area), with details, Navigate, trails, full screen, and a one-line radio
+  card while it's open. **⋮ → Map file… → Get a map for your area…** gives the
+  exact command for your area, sends it to your computer, and links to the
+  free pmtiles tool and the guide ([MAPS.md](MAPS.md)). The app still has no
+  internet access. Without a map, stations show on a plain grid.
+- **Map overlays:** GPX, KML and KMZ trail plans and search areas.
+- **Smart timed positions:** 🚗 Smart and 🚶 Smart in 📍 → Every….
+- **Weather:** 30-day history of the weather stations heard, as cards with
+  the nearest town and temperature, and small graphs.
+- **Alerts** (watched callsigns, areas, emergency packets), **objects** and
+  **bulletins**.
+- **Two rows of tabs and buttons**, a shorter ⋮ menu, and **Settings → Tabs
+  and shortcuts…** to arrange them.
+- Packet history kept for 30 days; export by time range.
+
 ## 1.0.0
 
 First public release.

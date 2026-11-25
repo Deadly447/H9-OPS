@@ -100,6 +100,9 @@ public final class StationStore {
 
     public List<Station.Heard> log() { return new ArrayList<>(log); }
 
+    /** The packet added last (with its "again" flag), or null. */
+    public Station.Heard newest() { return log.peekFirst(); }
+
     public int size() { return stations.size(); }
 
     public long lastPacketTime() { return lastPacketTime; }

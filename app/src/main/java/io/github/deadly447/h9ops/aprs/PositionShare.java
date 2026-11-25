@@ -108,6 +108,20 @@ public final class PositionShare {
                 + (p.blur == Blur.EXACT ? "" : ", rounded to " + p.blur.label.toLowerCase(Locale.US))
                 + (p.timeUtc != null ? ", fix at " + p.timeUtc : "");
         a.raw = raw;
+        a.shared = true;
+        a.radiusM = radiusM(p.blur, p.lat);
         return a;
+    }
+
+    /**
+     * How far the real spot can be from a rounded position: half the
+     * diagonal of the grid cell (narrower east-west away from the equator).
+     * NaN for exact positions.
+     */
+    public static double radiusM(Blur blur, double lat) {
+        if (blur == null || blur == Blur.EXACT) return Double.NaN;
+        double ns = blur.cellDeg / 2 * 111_320;
+        double ew = ns * Math.cos(Math.toRadians(lat));
+        return Math.sqrt(ns * ns + ew * ew);
     }
 }

@@ -25,6 +25,12 @@ public final class AprsPacket {
     public double speedKnots = Double.NaN;
     public double altitudeM = Double.NaN;
     public String comment;
+    /** A position a station sent us inside a message (PositionShare), not a beacon. */
+    public boolean shared;
+    /** Rounded shared positions: the real spot is somewhere within this many metres. */
+    public double radiusM = Double.NaN;
+    /** An object this phone placed (shown from what it sends: the radio doesn't hear itself). */
+    public boolean mine;
 
     public boolean killed;       // object/item deleted
     public String status;

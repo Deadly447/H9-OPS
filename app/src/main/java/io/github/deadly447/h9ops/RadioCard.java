@@ -34,6 +34,9 @@ final class RadioCard {
     private final TextView[][] cells = new TextView[2][6];
     /** Column widths in dp; 0 = the frequency column, which takes the rest. */
     private static final int[] COLS = {30, 0, 40, 40, 30, 58};
+    /** One line only (link state, battery), for the Map tab; tap to open it fully. */
+    private boolean compact;
+    private RadioInfo lastInfo;
 
     RadioCard(Context c, View.OnClickListener onCard, View.OnClickListener onButton) {
         this.c = c;
@@ -134,8 +137,28 @@ final class RadioCard {
     }
 
     /** @param deviceLine the radio's name and PIN; @param detail the state text when not connected; @param hint the quiet hint or null */
+    /** One line (the Map tab) or the full card. */
+    void setCompact(boolean on) {
+        if (compact == on) return;
+        compact = on;
+        root.setPadding(dp(14), dp(on ? 10 : 14), dp(14), dp(on ? 10 : 12));
+        applyCompact();
+    }
+
+    boolean compact() { return compact; }
+
+    private void applyCompact() {
+        int full = compact ? View.GONE : View.VISIBLE;
+        device.setVisibility(full);
+        button.setVisibility(full);
+        int withInfo = lastInfo != null && !compact ? View.VISIBLE : View.GONE;
+        bar.setVisibility(withInfo);
+        table.setVisibility(withInfo);
+    }
+
     void update(Repo.State s, RadioInfo info, String deviceLine, String detail, String hint) {
         boolean connected = s == Repo.State.CONNECTED;
+        lastInfo = info;
         state.setText(connected ? "LISTENING" : s == Repo.State.SCANNING ? "SEARCHING"
                 : s == Repo.State.CONNECTING ? "CONNECTING" : s == Repo.State.WAITING ? "RECONNECTING" : "OFFLINE");
         state.setTextColor(connected ? Ui.accent : Ui.muted);
@@ -164,6 +187,7 @@ final class RadioCard {
         device.setText(line);
         device.setTextColor(hint != null ? Ui.accent : Ui.muted);
         button.setText(s == Repo.State.STOPPED ? "CONNECT" : "DISCONNECT");
+        applyCompact();
     }
 
     private LinearLayout row() {

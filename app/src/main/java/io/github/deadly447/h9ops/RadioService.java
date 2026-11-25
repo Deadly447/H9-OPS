@@ -931,12 +931,15 @@ public class RadioService extends Service implements Repo.Listener {
             return;
         }
         fixing = true;
+        // smart plans compare one check with the next, so they need a fresh fix, not a cached one
+        long maxAge = 120_000;
+        for (AutoPosition.Plan p : due) if (p.smart != null) maxAge = 15_000;
         dev.log("POS", "timed position due for " + due.size() + " station(s), getting a GPS fix");
         final long fixStart = SystemClock.elapsedRealtime();
         PowerManager pm = getSystemService(PowerManager.class);
         PowerManager.WakeLock wl = pm == null ? null : pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "h9ops:fix");
         if (wl != null) wl.acquire(FIX_TIMEOUT_MS + 5_000);
-        getFix(l -> {
+        getFix(maxAge, l -> {
             fixing = false;
             if (wl != null && wl.isHeld()) wl.release();
             long took = SystemClock.elapsedRealtime() - fixStart;
@@ -947,6 +950,8 @@ public class RadioService extends Service implements Repo.Listener {
             for (AutoPosition.Plan p : due) {
                 if (repo.auto.get(p.peer) != p) continue;   // stopped meanwhile
                 if (l == null) repo.autoFailed(p, "No GPS fix");
+                else if (p.smart != null) repo.smartFix(p, l.getLatitude(), l.getLongitude(), l.getTime(),
+                        l.hasSpeed() ? l.getSpeed() : Double.NaN, l.hasBearing() ? l.getBearing() : Double.NaN);
                 else repo.sendAuto(p, l.getLatitude(), l.getLongitude(), l.getTime());
             }
             scheduleAuto();
@@ -955,15 +960,15 @@ public class RadioService extends Service implements Repo.Listener {
 
     private interface FixDone { void done(Location l); }
 
-    /** One GPS fix (a recent one if there is), or null after 90 s. */
+    /** One GPS fix (one up to {@code maxAgeMs} old if there is), or null after 90 s. */
     @SuppressLint("MissingPermission")
     @SuppressWarnings("deprecation")
-    private void getFix(FixDone cb) {
+    private void getFix(long maxAgeMs, FixDone cb) {
         LocationManager lm = getSystemService(LocationManager.class);
         if (lm == null || !lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) { cb.done(null); return; }
         try {
             Location last = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-            if (last != null && System.currentTimeMillis() - last.getTime() < 120_000) { cb.done(last); return; }
+            if (last != null && System.currentTimeMillis() - last.getTime() < maxAgeMs) { cb.done(last); return; }
             final boolean[] done = {false};
             final CancellationSignal cancel = new CancellationSignal();
             final LocationListener listener = new LocationListener() {
@@ -1023,7 +1028,7 @@ public class RadioService extends Service implements Repo.Listener {
             StringBuilder sb = new StringBuilder("📍 Sending your position to ");
             for (int i = 0; i < plans.size(); i++) {
                 if (i > 0) sb.append(", ");
-                sb.append(plans.get(i).peer).append(" every ").append(plans.get(i).minutes).append(" min");
+                sb.append(plans.get(i).peer).append(' ').append(plans.get(i).label());
             }
             text = sb + " · " + text;
         }

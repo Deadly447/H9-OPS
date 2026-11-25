@@ -4,7 +4,9 @@
 TIDRADIO TD-H9 handheld. The radio decodes APRS itself and passes each packet
 to the phone over Bluetooth LE; H9 OPS lists the stations it hears, keeps a raw
 packet log, shows the radio's battery and channel settings, and sends and
-receives APRS text messages through the radio.
+receives APRS text messages through the radio. It also shows stations on an
+offline map, keeps weather stations' readings as small graphs, and can send
+your position on a smart timer.
 
 Two people with a TD-H9 and this app each can message each other radio to
 radio, with acknowledgements, retries and delivery ticks. The app never
@@ -23,6 +25,9 @@ as a message to one station, when you tap 📍 or on a timer you set.
 - [Install](#install)
 - [Getting started](#getting-started)
 - [Messaging](#messaging)
+- [Map](#map)
+- [Weather](#weather)
+- [Alerts, objects and bulletins](#alerts-objects-and-bulletins)
 - [Privacy](#privacy)
 - [More features](#more-features)
 - [Building the APK](#building-the-apk)
@@ -143,7 +148,14 @@ On the air it looks like `POS 40.0417,-105.2583 1mi @0515z` (rounded) or
 ### Send my position regularly
 
 📍 → **Every…** sends your position to that station every 5, 10, 15 or 30
-minutes, or every 1 or 2 hours, with the same precision choices.
+minutes, or every 1 or 2 hours, or **Smart**, with the same precision choices.
+
+- **🚗 Smart / 🚶 Smart** (SmartBeaconing) send more often when you move and
+  rarely when you don't. Driving: the phone checks the GPS every minute and
+  sends every 3 minutes at 60 mph or faster, every 6 at 30 mph, every 30 when
+  parked, soon after a turn, and once when you stop. On foot: checks every 2
+  minutes; every 5 minutes at 4 mph, every 10 at 2 mph, every 30 below 1 mph.
+  Checking the GPS this often costs more battery than a fixed timer.
 
 - **Stop** after 1, 4, 12 (default) or 24 hours, or "until I turn it off", so
   a forgotten timer can't keep reporting where you are.
@@ -154,14 +166,60 @@ minutes, or every 1 or 2 hours, with the same precision choices.
 - Each position is a transmission: direction-finding can locate you from
   them, whatever the precision setting says.
 
+## Map
+
+The **Map** tab shows every station with a position on an **offline map**:
+amber for beacons, blue for positions shared by message, purple for objects,
+with a dashed circle where a position is only approximate. Tap a station for
+its details, Navigate, or (for your own objects) Remove. Long-press the map to
+place an object, draw an alert area, or navigate there. Buttons: full screen,
+my position, fit all stations, and station trails. On the Map tab the radio
+card shrinks to one line; tap it to open it.
+
+**The map file.** H9 OPS never downloads maps (it has no internet access). You
+make one file for your area on a computer, once: **⋮ → Map file… → Get a map
+for your area…** gives you the exact command for a box around where you are,
+a button to send it to your computer, and links to the free tool and the
+guide. Full steps: **[MAPS.md](MAPS.md)**. Without a map file, stations still
+show on a plain grid.
+
+**Overlays.** **⋮ → Map overlays… → Add file…** draws GPX, KML or KMZ files
+(trail plans, search segments, waypoints from CalTopo, Gaia, onX, Google Earth
+or ATAK) in green on the map. Tick to show or hide; tap one to zoom to it or
+remove it.
+
+## Weather
+
+Weather stations heard on the air are kept for 30 days. **Weather** lists them
+as cards: station, nearest town (read from your map file, so no internet),
+when it was last heard, wind and humidity, and the temperature. Tap one for
+small graphs of temperature, humidity, pressure (with its 3-hour trend), wind
+and gusts, and rain over 24 hours, 3, 7 or 30 days; drag across a graph to read
+it. Only stations that transmit show up: CWOP stations (CW…, DW… callsigns on
+aprs.fi) upload over the internet and are never on the air.
+
+## Alerts, objects and bulletins
+
+- **Alerts:** a notification when a callsign you watch is heard (`N0CALL-*`
+  for every SSID), when a station enters or leaves an area you drew on the
+  map, or on any emergency packet (its own channel, vibrates).
+- **Objects:** long-press the map → **Place an object here…** (command post,
+  aid, shelter, team, staging and more). It's resent every 5, 10 or 30
+  minutes until you remove it.
+- **Bulletins:** 📢 on the Messages tab lists the bulletins heard and sends
+  your own, once or repeated for 1 or 4 hours.
+
 ## Privacy
 
 - **No internet access at all.** The app doesn't ask for the INTERNET
   permission, so Android won't let it reach any server: no APRS-IS, no
   analytics, no update checks.
-- **Data stays on the phone.** Messages, heard packets (the last 1,000) and
-  tracks are kept in the app's private storage, excluded from cloud backup and
-  device-to-device transfer.
+- **Data stays on the phone.** Messages, heard packets (30 days), weather
+  history, tracks, the map file and overlays are kept in the app's private
+  storage, excluded from cloud backup and device-to-device transfer.
+- **The map can't reach the internet either.** It runs inside the app and
+  answers only its own pages and the map file; any other request is refused.
+  Links in Map file… (the guide, the pmtiles tool) open in your browser.
 - **Notifications don't show message text on the lock screen.**
 - **Location only when you send it.** Bluetooth scanning is declared "never
   for location". The app reads the GPS when you tap 📍, while you record a
@@ -169,8 +227,10 @@ minutes, or every 1 or 2 hours, with the same precision choices.
   so the whole time). It never asks for "Allow all the time".
 - **Nothing is transmitted unless you send something:** a message, a
   position, or the automatic acknowledgement of a message sent to you.
-- **No libraries.** Only the Android framework is used, so there is no
-  third-party code in the APK.
+- **Almost no libraries.** The app itself uses only the Android framework.
+  The map page bundles two JavaScript libraries, Leaflet and
+  protomaps-leaflet (BSD licences, in `app/src/main/assets/map/vendor/`),
+  which run offline inside the app.
 
 Limits worth knowing:
 
@@ -223,11 +283,11 @@ protected by the PIN.
 
 ### Recording a track
 
-**⋮ → Record track** records this phone's GPS track, and every station
+**Record track** (in ⋮, or **Tracks → Record track**) records this phone's GPS track, and every station
 position the radio hears, until you stop it. It needs no signal: phone and
 radio are enough. The footer shows **● REC** while it records.
 
-- **⋮ → Tracks…** lists them (date, distance, time, stations heard). Tap one
+- **Tracks** lists them (date, distance, time, stations heard). Tap one
   to **Export GPX…** (save, or share to a map app: ATAK, CalTopo, OsmAnd,
   Organic Maps and others open it) or to delete it.
 - Stations heard at two or more places become their own tracks; the rest are
@@ -235,8 +295,9 @@ radio are enough. The footer shows **● REC** while it records.
 
 ### Exports
 
-**⋮ → Export packet log…** saves the log as text, or **Share…** sends it
-straight to another app.
+**⋮ → Export packet log…** saves the newest 1,000 packets, the last 24 hours,
+7 days or everything kept (30 days) as text, or **Share…** sends it straight
+to another app.
 
 ### Developer mode
 
@@ -248,6 +309,11 @@ text, the PIN and coordinates are never written to it. It stays on the phone
 (about 2 MB at most) until you export or clear it: **⋮ → Developer log**.
 
 ### Look
+
+Under the radio card are two rows: the tabs (**Stations, Messages, Log, Map**)
+and four buttons (**Weather, Tracks, Objects, Alerts**). Everything else is in
+**⋮**. **Settings → Tabs and shortcuts…** moves any of them between row 1,
+row 2 and ⋮. Clearing stations or messages is at the bottom of Settings.
 
 True black, amber accent, callsigns in JetBrains Mono. **⋮ → Night red**
 switches everything to red for use in the dark. The font is bundled under the

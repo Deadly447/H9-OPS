@@ -277,11 +277,11 @@ public final class AprsParser {
                     len = 3; break;
                 case 'h': len = 2; break;
                 case 'b': len = 5; break;
-                default: return s.substring(i);
+                default: return missing(w, s.substring(i));
             }
-            if (i + 1 + len > s.length()) return s.substring(i);
+            if (i + 1 + len > s.length()) return missing(w, s.substring(i));
             String v = s.substring(i + 1, i + 1 + len);
-            if (!v.matches("[-\\d. ]+")) return s.substring(i);
+            if (!v.matches("[-\\d. ]+")) return missing(w, s.substring(i));
             double d = num(v);
             switch (k) {
                 case 'c': w.windDir = d; break;
@@ -297,7 +297,20 @@ public final class AprsParser {
             }
             i += 1 + len;
         }
-        return "";
+        return missing(w, "");
+    }
+
+    /**
+     * Stations with no barometer or humidity sensor often send b00000 and h00 (h00 is
+     * officially 100%). No real pressure is below 500 mb, and h00 next to b00000 is that same
+     * missing sensor, so both become "not sent" rather than 0 mb and 100%.
+     */
+    private static String missing(AprsPacket.Weather w, String rest) {
+        if (w.pressureMb < 500) {
+            if (w.pressureMb == 0 && w.humidity == 100) w.humidity = Double.NaN;
+            w.pressureMb = Double.NaN;
+        }
+        return rest;
     }
 
     private static double num(String v) {

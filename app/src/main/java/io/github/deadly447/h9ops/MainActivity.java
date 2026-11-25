@@ -53,7 +53,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import io.github.deadly447.h9ops.aprs.AprsPacket;
+import io.github.deadly447.h9ops.map.MapFile;
+import io.github.deadly447.h9ops.map.MapJson;
 import io.github.deadly447.h9ops.aprs.AutoPosition;
+import io.github.deadly447.h9ops.aprs.SmartBeacon;
+import io.github.deadly447.h9ops.aprs.WxHistory;
+import io.github.deadly447.h9ops.ui.Shortcuts;
 import io.github.deadly447.h9ops.aprs.Ax25;
 import io.github.deadly447.h9ops.aprs.AprsParser;
 import io.github.deadly447.h9ops.aprs.Format;
@@ -65,18 +70,30 @@ import io.github.deadly447.h9ops.aprs.Station;
 import io.github.deadly447.h9ops.aprs.Symbols;
 import io.github.deadly447.h9ops.track.Track;
 
-/** One screen: connection bar, then either the heard-stations list or the raw packet log. */
+/** One screen: radio card, then the stations list, messages, the raw packet log or the map. */
 @SuppressLint("MissingPermission")   // checked in hasPermissions() before any Bluetooth call
-public class MainActivity extends Activity implements Repo.Listener {
+public class MainActivity extends Activity implements Repo.Listener, MapPane.Host {
     public static final String EXTRA_THREAD = "thread";
+    public static final String EXTRA_STATION = "station";
     private static final int REQ_PERMS = 1, REQ_LOCATION = 2;
-    private static final int TAB_STATIONS = 0, TAB_MESSAGES = 1, TAB_LOG = 2;
+    private static final int TAB_STATIONS = 0, TAB_MESSAGES = 1, TAB_LOG = 2, TAB_MAP = 3;
 
     private Repo repo;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private TextView emptyText, footer;
     private RadioCard radioCard;
-    private Button stationsTab, messagesTab, logTab, newMsgBtn;
+    private Button newMsgBtn, bulletinsBtn;
+    /** The two rows under the radio card (Settings → Tabs and shortcuts). */
+    private Shortcuts shortcuts;
+    private LinearLayout row1View, row2View;
+    private final List<Button> slotButtons = new ArrayList<>();
+    private final List<Shortcuts.Item> slotItems = new ArrayList<>();
+    private boolean slotsRecording;
+    private LinearLayout msgRow;
+    private View headerView, tabsView;
+    private android.widget.FrameLayout mapHolder;
+    private MapPane mapPane;        // created the first time the Map tab opens
+    private boolean mapFull;
     private ListView list;
     private int tab = TAB_STATIONS;
     private final PeerAdapter peerAdapter = new PeerAdapter();
@@ -115,6 +132,13 @@ public class MainActivity extends Activity implements Repo.Listener {
     }
 
     private void openThreadFrom(Intent i) {
+        String st = i == null ? null : i.getStringExtra(EXTRA_STATION);
+        if (st != null) {
+            i.removeExtra(EXTRA_STATION);
+            Station s = st.length() <= 9 ? repo.store.get(st) : null;   // only a station we have
+            if (s != null) showStation(s);
+            return;
+        }
         String peer = i == null ? null : i.getStringExtra(EXTRA_THREAD);
         if (peer == null) return;
         i.removeExtra(EXTRA_THREAD);
@@ -137,6 +161,7 @@ public class MainActivity extends Activity implements Repo.Listener {
         repo.addListener(this);
         onRepoChanged();
         ui.postDelayed(tick, 10000);
+        if (mapPane != null) mapPane.show(tab == TAB_MAP);
         // A recording that Android stopped (low memory, update) carries on once the app is open
         if (repo.tracks.recording() && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) TrackService.start(this, null);
@@ -146,7 +171,22 @@ public class MainActivity extends Activity implements Repo.Listener {
     protected void onPause() {
         repo.removeListener(this);
         ui.removeCallbacks(tick);
+        if (mapPane != null) mapPane.show(false);
         super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (mapPane != null) mapPane.destroy();
+        mapPane = null;
+        super.onDestroy();
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        if (mapFull) { setMapFull(false); return; }
+        super.onBackPressed();
     }
 
     @Override
@@ -157,10 +197,7 @@ public class MainActivity extends Activity implements Repo.Listener {
         String radio = mac == null ? "No radio chosen" : (name != null ? name.replace("(BLE)", "").trim() : mac)
                 + " · BLE" + (repo.radioPin() != null ? " · PIN LOCKED" : "");
         radioCard.update(s, repo.radioInfo(), radio, repo.stateText(), repo.quietHint());
-        stationsTab.setText("Stations " + repo.store.size());
-        int unread = 0;
-        for (String p : repo.messenger.peers()) if (repo.isUnread(p)) unread++;
-        messagesTab.setText(unread > 0 ? "Messages " + unread : "Messages");
+        labelSlots();
         footer.setText("NO INTERNET  ·  " + (repo.rfOnly() ? "NOGATE ON" : "NOGATE OFF")
                 + (repo.quiet() ? "  ·  QUIET" : "") + (repo.dev.on() ? "  ·  DEV LOG" : "")
                 + (repo.tracks.recording() ? "  ·  ● REC" : "") + "  ·  " + repo.store.size() + " HEARD");
@@ -223,8 +260,13 @@ public class MainActivity extends Activity implements Repo.Listener {
                     : "No messages yet.\n\nMessages to " + repo.myCall() + " show up here. Tap New message to send one.")
                 : "Nothing heard yet.\n\nChoose your radio, press Connect, and packets the radio "
                     + "decodes will show up here.");
-        emptyText.setVisibility(empty ? View.VISIBLE : View.GONE);
-        newMsgBtn.setVisibility(tab == TAB_MESSAGES ? View.VISIBLE : View.GONE);
+        emptyText.setVisibility(empty && tab != TAB_MAP ? View.VISIBLE : View.GONE);
+        msgRow.setVisibility(tab == TAB_MESSAGES ? View.VISIBLE : View.GONE);
+        if (tab == TAB_MESSAGES) {
+            int n = repo.board.entries(System.currentTimeMillis()).size(), unseen = repo.board.unseen();
+            bulletinsBtn.setText("📢 Bulletins" + (n > 0 ? " · " + n : "") + (unseen > 0 ? " NEW" : ""));
+        }
+        if (mapPane != null) mapPane.stationsChanged();
     }
 
     // ---------------------------------------------------------------- layout
@@ -241,6 +283,7 @@ public class MainActivity extends Activity implements Repo.Listener {
 
         // header: the app name, menu
         LinearLayout header = new LinearLayout(this);
+        headerView = header;
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(20), dp(14), dp(16), dp(6));
         TextView app = new TextView(this);
@@ -263,37 +306,51 @@ public class MainActivity extends Activity implements Repo.Listener {
         root.addView(header);
 
         // radio card (tactical readout)
-        radioCard = new RadioCard(this, v -> showRadioInfo(), v -> toggleConnection());
+        // On the Map tab the card is one line; a tap opens it fully (another tap: radio details).
+        radioCard = new RadioCard(this, v -> {
+            if (radioCard.compact()) radioCard.setCompact(false);
+            else showRadioInfo();
+        }, v -> toggleConnection());
         View card = radioCard.root;
         LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         cl.setMargins(dp(16), dp(8), dp(16), 0);
         root.addView(card, cl);
 
-        // segmented tabs
-        LinearLayout tabs = new LinearLayout(this);
-        tabs.setPadding(dp(4), dp(4), dp(4), dp(4));
-        tabs.setBackground(Ui.box(this, Ui.SURFACE, Ui.BORDER, 14));
-        stationsTab = button("Stations", v -> selectTab(TAB_STATIONS));
-        messagesTab = button("Messages", v -> selectTab(TAB_MESSAGES));
-        logTab = button("Log", v -> selectTab(TAB_LOG));
-        for (Button b : new Button[]{stationsTab, messagesTab, logTab}) {
-            b.setSingleLine(true);
-            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(0, dp(40), 1);
-            tl.setMargins(dp(2), 0, dp(2), 0);
-            tabs.addView(b, tl);
-        }
+        // two rows: four tabs in a segmented bar, then four tools (Settings → Tabs and shortcuts)
+        LinearLayout slots = new LinearLayout(this);
+        slots.setOrientation(LinearLayout.VERTICAL);
+        tabsView = slots;
+        row1View = new LinearLayout(this);
+        row1View.setPadding(dp(4), dp(4), dp(4), dp(4));
+        row1View.setBackground(Ui.box(this, Ui.SURFACE, Ui.BORDER, 14));
+        slots.addView(row1View, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        row2View = new LinearLayout(this);
+        LinearLayout.LayoutParams r2 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        r2.topMargin = dp(8);
+        slots.addView(row2View, r2);
         LinearLayout.LayoutParams tbl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         tbl.setMargins(dp(16), dp(14), dp(16), dp(8));
-        root.addView(tabs, tbl);
+        root.addView(slots, tbl);
+        buildSlots();
 
         newMsgBtn = button("New message", v -> newMessage(null));
         Ui.outline(newMsgBtn);
+        bulletinsBtn = button("📢 Bulletins", v -> bulletinsDialog());
+        Ui.outline(bulletinsBtn);
+        msgRow = new LinearLayout(this);
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, dp(44), 1);
+        msgRow.addView(newMsgBtn, half);
+        LinearLayout.LayoutParams half2 = new LinearLayout.LayoutParams(0, dp(44), 1);
+        half2.setMargins(dp(8), 0, 0, 0);
+        msgRow.addView(bulletinsBtn, half2);
         LinearLayout.LayoutParams nl = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
         nl.setMargins(dp(16), dp(2), dp(16), dp(6));
-        root.addView(newMsgBtn, nl);
+        root.addView(msgRow, nl);
 
         emptyText = new TextView(this);
         emptyText.setGravity(Gravity.CENTER);
@@ -325,6 +382,10 @@ public class MainActivity extends Activity implements Repo.Listener {
         });
         root.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
+        mapHolder = new android.widget.FrameLayout(this);
+        mapHolder.setVisibility(View.GONE);
+        root.addView(mapHolder, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
         footer = new TextView(this);
         footer.setTypeface(Ui.mono());
         footer.setTextSize(11);
@@ -335,38 +396,268 @@ public class MainActivity extends Activity implements Repo.Listener {
         return root;
     }
 
+    /**
+     * ⋮: the radio, data, whatever isn't in the two rows (Settings → Tabs and shortcuts), and
+     * Settings. Clearing stations and messages lives in Settings.
+     */
     private void showMenu(View anchor) {
         android.widget.PopupMenu m = new android.widget.PopupMenu(this, anchor);
-        m.getMenu().add(0, 1, 0, "Choose radio");
-        m.getMenu().add(0, 2, 1, "Settings");
-        m.getMenu().add(0, 3, 2, Ui.night ? "Night red: on" : "Night red: off");
-        m.getMenu().add(0, 4, 3, "Clear stations and log");
-        m.getMenu().add(0, 5, 4, "Clear messages");
-        m.getMenu().add(0, 6, 5, "Export packet log…");
-        m.getMenu().add(0, 8, 7, repo.tracks.recording() ? "Stop recording track" : "Record track");
-        m.getMenu().add(0, 9, 8, "Tracks…");
-        if (repo.dev.on()) m.getMenu().add(0, 7, 6, "Developer log");
+        android.view.Menu mm = m.getMenu();
+        if (Build.VERSION.SDK_INT >= 28) mm.setGroupDividerEnabled(true);
+        mm.add(1, 1, 0, "Choose radio");
+        mm.add(1, 3, 1, Ui.night ? "Night red: on" : "Night red: off");
+        mm.add(2, 6, 2, "Export packet log…");
+        if (repo.dev.on()) mm.add(2, 7, 3, "Developer log");
+        List<Shortcuts.Item> more = shortcuts.menu();
+        for (int i = 0; i < more.size(); i++) mm.add(3, 100 + more.get(i).ordinal(), 10 + i, menuLabel(more.get(i)));
+        mm.add(4, 2, 50, "Settings");
         m.setOnMenuItemClickListener(item -> {
-            switch (item.getItemId()) {
+            int id = item.getItemId();
+            if (id >= 100 && id - 100 < Shortcuts.Item.values().length) {
+                runItem(Shortcuts.Item.values()[id - 100]);
+                return true;
+            }
+            switch (id) {
                 case 1: withPermissions(this::chooseRadio); return true;
                 case 2: showSettings(); return true;
                 case 3: Ui.setNight(this, !Ui.night); recreate(); return true;
-                case 4: confirmClear(); return true;
                 case 6: exportPackets(); return true;
                 case 7: showDevLog(); return true;
-                case 8: toggleTrack(); return true;
-                case 9: showTracks(); return true;
-                case 5:
-                    new AlertDialog.Builder(this)
-                            .setMessage("Delete all messages?")
-                            .setPositiveButton("Delete", (d, w) -> repo.clearMessages())
-                            .setNegativeButton("Cancel", null)
-                            .show();
-                    return true;
                 default: return false;
             }
         });
         m.show();
+    }
+
+    // ---- the two rows of tabs and tools ----
+
+    private void buildSlots() {
+        shortcuts = Shortcuts.parse(getSharedPreferences("settings", MODE_PRIVATE).getString("shortcuts", ""));
+        slotButtons.clear();
+        slotItems.clear();
+        row1View.removeAllViews();
+        row2View.removeAllViews();
+        for (int r = 0; r < 2; r++) {
+            List<Shortcuts.Item> items = shortcuts.row(r);
+            for (int i = 0; i < items.size(); i++) {
+                Shortcuts.Item it = items.get(i);
+                Button b = button(it.label, v -> runItem(it));
+                LinearLayout.LayoutParams lp;
+                if (r == 0) {
+                    lp = new LinearLayout.LayoutParams(0, dp(40), 1);
+                    lp.setMargins(dp(2), 0, dp(2), 0);
+                    row1View.addView(b, lp);
+                } else {
+                    lp = new LinearLayout.LayoutParams(0, dp(56), 1);
+                    if (i > 0) lp.leftMargin = dp(6);
+                    row2View.addView(b, lp);
+                }
+                slotButtons.add(b);
+                slotItems.add(it);
+            }
+        }
+        styleSlots();
+    }
+
+    private static int tabOf(Shortcuts.Item it) {
+        switch (it) {
+            case MESSAGES: return TAB_MESSAGES;
+            case LOG: return TAB_LOG;
+            case MAP: return TAB_MAP;
+            default: return TAB_STATIONS;
+        }
+    }
+
+    /** Colours for the current tab and a running recording. */
+    private void styleSlots() {
+        slotsRecording = repo.tracks.recording();
+        for (int k = 0; k < slotButtons.size(); k++) {
+            Button b = slotButtons.get(k);
+            Shortcuts.Item it = slotItems.get(k);
+            boolean on = (it.tab && tabOf(it) == tab) || (it == Shortcuts.Item.RECORD && slotsRecording);
+            if (k < Shortcuts.PER_ROW) {
+                if (on) Ui.filled(b, 10);
+                else {
+                    Ui.plain(b);
+                    b.setBackground(null);
+                    b.setTextColor(Ui.text);
+                    b.setTypeface(Typeface.DEFAULT);
+                }
+                b.setCompoundDrawables(null, null, null, null);
+                b.setPadding(dp(4), 0, dp(4), 0);
+                // Keep each tab on one line whatever the phone's font: shrink the text to fit.
+                b.setAutoSizeTextTypeUniformWithConfiguration(9, 14, 1, TypedValue.COMPLEX_UNIT_SP);
+            } else {
+                if (on) Ui.outline(b); else Ui.plain(b);
+                b.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                android.graphics.drawable.Drawable ic = slotIcon(it);
+                b.setCompoundDrawablesRelativeWithIntrinsicBounds(null, ic, null, null);
+                b.setCompoundDrawablePadding(dp(2));
+                b.setPadding(dp(2), dp(6), dp(2), dp(4));
+                b.setAutoSizeTextTypeUniformWithConfiguration(8, 12, 1, TypedValue.COMPLEX_UNIT_SP);
+            }
+            b.setMinWidth(0);
+            b.setMinimumWidth(0);
+            b.setMinHeight(0);
+            b.setMinimumHeight(0);
+            b.setSingleLine(true);
+        }
+        labelSlots();
+    }
+
+    /** Counts on the buttons (stations heard, unread conversations, new bulletins). */
+    private void labelSlots() {
+        if (repo.tracks.recording() != slotsRecording) { styleSlots(); return; }
+        for (int k = 0; k < slotButtons.size(); k++) {
+            String t = slotLabel(slotItems.get(k));
+            Button b = slotButtons.get(k);
+            if (!t.contentEquals(b.getText())) b.setText(t);
+            b.setContentDescription(t);
+        }
+    }
+
+    private String slotLabel(Shortcuts.Item it) {
+        switch (it) {
+            case STATIONS: return "Stations " + repo.store.size();
+            case MESSAGES: {
+                int unread = 0;
+                for (String p : repo.messenger.peers()) if (repo.isUnread(p)) unread++;
+                return unread > 0 ? "Messages " + unread : "Messages";
+            }
+            case BULLETINS: {
+                int unseen = repo.board.unseen();
+                return unseen > 0 ? "Bulletins " + unseen : "Bulletins";
+            }
+            case RECORD: return repo.tracks.recording() ? "Stop rec" : "Record";
+            default: return it.label;
+        }
+    }
+
+    private String menuLabel(Shortcuts.Item it) {
+        if (it == Shortcuts.Item.RECORD) return repo.tracks.recording() ? "Stop recording track" : "Record track";
+        if (it.tab) return slotLabel(it);
+        return it.menuLabel;
+    }
+
+    private android.graphics.drawable.Drawable slotIcon(Shortcuts.Item it) {
+        int res;
+        switch (it) {
+            case STATIONS: res = R.drawable.ic_sc_stations; break;
+            case MESSAGES: res = R.drawable.ic_sc_messages; break;
+            case LOG: res = R.drawable.ic_sc_log; break;
+            case MAP: res = R.drawable.ic_sc_map; break;
+            case WEATHER: res = R.drawable.ic_sc_weather; break;
+            case TRACKS: res = R.drawable.ic_sc_tracks; break;
+            case OBJECTS: res = R.drawable.ic_sc_objects; break;
+            case ALERTS: res = R.drawable.ic_sc_alerts; break;
+            case BULLETINS: res = R.drawable.ic_sc_bulletins; break;
+            case RECORD: res = R.drawable.ic_sc_record; break;
+            case OVERLAYS: res = R.drawable.ic_sc_overlays; break;
+            default: res = R.drawable.ic_sc_mapfile; break;
+        }
+        android.graphics.drawable.Drawable d = getDrawable(res);
+        if (d == null) return null;
+        d = d.mutate();
+        d.setTint(Ui.accent);
+        return d;
+    }
+
+    /** A tab switches the screen; a tool opens its dialog. */
+    private void runItem(Shortcuts.Item it) {
+        switch (it) {
+            case STATIONS: case MESSAGES: case LOG: case MAP: selectTab(tabOf(it)); break;
+            case WEATHER: weatherListDialog(); break;
+            case TRACKS: showTracks(); break;
+            case OBJECTS: objectsDialog(); break;
+            case ALERTS: alertsDialog(); break;
+            case BULLETINS: bulletinsDialog(); break;
+            case RECORD: toggleTrack(); break;
+            case MAP_FILE: mapFileDialog(); break;
+            case OVERLAYS: overlaysDialog(); break;
+        }
+    }
+
+    /** Settings → Tabs and shortcuts: move items between row 1, row 2 and the ⋮ menu. */
+    private void shortcutsDialog() {
+        Shortcuts edit = Shortcuts.parse(shortcuts.save());
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), 0, dp(12), dp(8));
+        Runnable[] fill = new Runnable[1];
+        fill[0] = () -> {
+            box.removeAllViews();
+            List<Shortcuts.Item> o = edit.order();
+            for (int i = 0; i < o.size(); i++) {
+                if (i == 0 || i == Shortcuts.PER_ROW || i == Shortcuts.IN_ROWS) {
+                    TextView h = label(i == 0 ? "ROW 1 · TABS" : i == Shortcuts.PER_ROW ? "ROW 2" : "IN THE ⋮ MENU");
+                    h.setTextSize(11);
+                    h.setLetterSpacing(0.15f);
+                    h.setPadding(0, dp(14), 0, dp(4));
+                    box.addView(h);
+                }
+                Shortcuts.Item it = o.get(i);
+                LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                TextView name = new TextView(this);
+                name.setText(it.tab ? it.label : it.menuLabel.replace("…", ""));
+                name.setTextSize(15);
+                name.setTextColor(i < Shortcuts.IN_ROWS ? Ui.text : Ui.muted);
+                row.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                final int k = i;
+                Button up = button("↑", v -> { edit.move(k, -1); fill[0].run(); });
+                Button down = button("↓", v -> { edit.move(k, 1); fill[0].run(); });
+                for (Button b : new Button[]{up, down}) {
+                    b.setTextColor(Ui.accent);
+                    b.setTextSize(18);
+                    b.setBackground(null);
+                    b.setPadding(0, 0, 0, 0);
+                }
+                up.setEnabled(i > 0);
+                down.setEnabled(i < o.size() - 1);
+                up.setAlpha(i > 0 ? 1f : 0.25f);
+                down.setAlpha(i < o.size() - 1 ? 1f : 0.25f);
+                up.setContentDescription("Move " + it.label + " up");
+                down.setContentDescription("Move " + it.label + " down");
+                row.addView(up, new LinearLayout.LayoutParams(dp(48), dp(44)));
+                row.addView(down, new LinearLayout.LayoutParams(dp(48), dp(44)));
+                box.addView(row);
+            }
+        };
+        fill[0].run();
+        TextView how = label("Row 1 is the tab bar, row 2 the buttons under it. Everything else is in ⋮. "
+                + "Move an item past the end of a row to swap it into the next one.");
+        how.setTextSize(13);
+        LinearLayout outer = new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        how.setPadding(dp(20), dp(4), dp(20), 0);
+        outer.addView(how);
+        outer.addView(box);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(outer);
+        AlertDialog d = new AlertDialog.Builder(this)
+                .setTitle("Tabs and shortcuts")
+                .setView(sv)
+                .setPositiveButton("Done", (dd, w) -> {
+                    getSharedPreferences("settings", MODE_PRIVATE).edit().putString("shortcuts", edit.save()).apply();
+                    buildSlots();
+                    selectTab(tab);
+                })
+                .setNeutralButton("Reset", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+        d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+            edit.reset();
+            fill[0].run();
+        }));
+        d.show();
+    }
+
+    private void confirmClearMessages() {
+        new AlertDialog.Builder(this)
+                .setMessage("Delete all messages?")
+                .setPositiveButton("Delete", (d, w) -> repo.clearMessages())
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private Button button(String text, View.OnClickListener l) {
@@ -383,24 +674,20 @@ public class MainActivity extends Activity implements Repo.Listener {
 
     private void selectTab(int t) {
         tab = t;
-        Button[] b = {stationsTab, messagesTab, logTab};
-        for (int i = 0; i < b.length; i++) {
-            if (i == t) {
-                Ui.filled(b[i], 10);
-            } else {
-                Ui.plain(b[i]);
-                b[i].setBackground(null);
-                b[i].setTextColor(Ui.text);
-                b[i].setTypeface(Typeface.DEFAULT);
-            }
-            // Keep each tab on one line whatever the phone's font: shrink the text to fit.
-            b[i].setPadding(dp(4), 0, dp(4), 0);
-            b[i].setMinWidth(0);
-            b[i].setMinimumWidth(0);
-            b[i].setSingleLine(true);
-            b[i].setAutoSizeTextTypeUniformWithConfiguration(9, 14, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
-        }
+        styleSlots();
         list.setAdapter(t == TAB_LOG ? logAdapter : t == TAB_MESSAGES ? peerAdapter : stationAdapter);
+        boolean map = t == TAB_MAP;
+        if (map && mapPane == null) {
+            mapPane = new MapPane(this, this, () -> MapJson.stations(repo.store.stations()),
+                    () -> MapJson.areas(repo.alerts.areas()), () -> overlays().json());
+            mapHolder.addView(mapPane.web, new android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        list.setVisibility(map ? View.GONE : View.VISIBLE);
+        mapHolder.setVisibility(map ? View.VISIBLE : View.GONE);
+        if (mapPane != null) mapPane.show(map);
+        if (!map && mapFull) setMapFull(false);
+        radioCard.setCompact(map);
         refreshList();
     }
 
@@ -428,6 +715,10 @@ public class MainActivity extends Activity implements Repo.Listener {
         TextView note = label("Messages go out over the air in plain text, like all APRS. Anyone listening "
                 + "can read them, and anyone can send a message under someone else's callsign. "
                 + "NOGATE is a request most iGates honour, not a guarantee.");
+        Button layoutBtn = button("Tabs and shortcuts…", v -> shortcutsDialog());
+        LinearLayout.LayoutParams lb = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+        lb.topMargin = dp(8);
+        box.addView(layoutBtn, lb);
         box.addView(l1); box.addView(call); box.addView(l2); box.addView(path); box.addView(rf);
         box.addView(quiet); box.addView(qnote); box.addView(note);
 
@@ -496,6 +787,17 @@ public class MainActivity extends Activity implements Repo.Listener {
                 + "checklist when you press Connect (and at most every 8 hours on automatic reconnects). Either "
                 + "way the status line turns to a hint after 15 minutes with nothing heard.");
         box.addView(chb); box.addView(chbNote);
+        box.addView(label("Data on this phone"));
+        LinearLayout clearRow = new LinearLayout(this);
+        clearRow.addView(button("Clear stations…", v -> confirmClear()), weight());
+        Button cm = button("Clear messages…", v -> confirmClearMessages());
+        LinearLayout.LayoutParams cml = weight();
+        cml.leftMargin = dp(8);
+        clearRow.addView(cm, cml);
+        LinearLayout.LayoutParams crl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        crl.bottomMargin = dp(12);
+        box.addView(clearRow, crl);
         ScrollView settingsScroll = new ScrollView(this);   // taller than some screens
         settingsScroll.addView(box);
         AlertDialog d = new AlertDialog.Builder(this)
@@ -519,7 +821,8 @@ public class MainActivity extends Activity implements Repo.Listener {
 
     // ---- exports and the developer log ----
 
-    private static final int REQ_EXPORT_PACKETS = 41, REQ_EXPORT_DEV = 42, REQ_EXPORT_TRACK = 43;
+    private static final int REQ_EXPORT_PACKETS = 41, REQ_EXPORT_DEV = 42, REQ_EXPORT_TRACK = 43, REQ_MAP_FILE = 44,
+            REQ_OVERLAY = 45;
     private String exportTrackId;
 
     private static String stamp() {
@@ -548,11 +851,26 @@ public class MainActivity extends Activity implements Repo.Listener {
                 .show();
     }
 
+    /** Which packets the export in progress covers: -1 = the newest 1000, else from this time on. */
+    private long exportSince = -1;
+    private String exportWhat = "packet log";
+
     private void exportPackets() {
-        String name = "h9ops-packets-" + stamp() + ".txt";
-        saveOrShare("packet log", () -> exportFile(REQ_EXPORT_PACKETS, name),
-                () -> shareFile("packet log", name, "text/plain",
-                        (out, done) -> repo.exportPackets(out, exportHeader("packet log"), done)));
+        String[] opts = {"Newest 1000 (the Packets tab)", "Last 24 hours", "Last 7 days", "Everything kept (30 days)"};
+        long[] back = {-1, 86_400_000L, 7 * 86_400_000L, History.KEEP_MS};
+        String[] what = {"packet log, newest 1000", "packet log, last 24 hours", "packet log, last 7 days", "packet log, last 30 days"};
+        new AlertDialog.Builder(this)
+                .setTitle("Export which packets?")
+                .setItems(opts, (d, w) -> {
+                    exportSince = back[w] < 0 ? -1 : System.currentTimeMillis() - back[w];
+                    exportWhat = what[w];
+                    String name = "h9ops-packets-" + stamp() + ".txt";
+                    saveOrShare("packet log", () -> exportFile(REQ_EXPORT_PACKETS, name),
+                            () -> shareFile("packet log", name, "text/plain",
+                                    (out, done) -> repo.exportPackets(out, exportHeader(exportWhat), exportSince, done)));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     /** Writes an export to the app's cache and opens Android's share sheet for it. */
@@ -597,6 +915,8 @@ public class MainActivity extends Activity implements Repo.Listener {
     protected void onActivityResult(int req, int result, Intent data) {
         super.onActivityResult(req, result, data);
         if (result != RESULT_OK || data == null || data.getData() == null) return;
+        if (req == REQ_MAP_FILE) { importMap(data.getData()); return; }
+        if (req == REQ_OVERLAY) { importOverlay(data.getData()); return; }
         if (req != REQ_EXPORT_PACKETS && req != REQ_EXPORT_DEV && req != REQ_EXPORT_TRACK) return;
         java.io.OutputStream out;
         try {
@@ -612,7 +932,7 @@ public class MainActivity extends Activity implements Repo.Listener {
             if (exportTrackId != null) repo.tracks.exportGpx(exportTrackId, out, repo.myCall(), done);
             return;
         }
-        if (req == REQ_EXPORT_PACKETS) repo.exportPackets(out, exportHeader("packet log"), done);
+        if (req == REQ_EXPORT_PACKETS) repo.exportPackets(out, exportHeader(exportWhat), exportSince, done);
         else repo.dev.export(out, exportHeader("developer log"), done);
     }
 
@@ -621,7 +941,7 @@ public class MainActivity extends Activity implements Repo.Listener {
     private void toggleTrack() {
         if (repo.tracks.recording()) {
             TrackService.stop(this);
-            toast("Track saved: ⋮ → Tracks…");
+            toast("Track saved: see Tracks");
             return;
         }
         android.widget.EditText name = new android.widget.EditText(this);
@@ -648,8 +968,9 @@ public class MainActivity extends Activity implements Repo.Listener {
         Track cur = repo.tracks.current();
         if (list.isEmpty() && cur == null) {
             new AlertDialog.Builder(this).setTitle("Tracks")
-                    .setMessage("No tracks yet. ⋮ → Record track starts one.")
-                    .setPositiveButton("OK", null).show();
+                    .setMessage("No tracks yet.")
+                    .setPositiveButton("Record track", (d, w) -> toggleTrack())
+                    .setNegativeButton("Close", null).show();
             return;
         }
         List<Track> all = new ArrayList<>();
@@ -663,6 +984,7 @@ public class MainActivity extends Activity implements Repo.Listener {
         new AlertDialog.Builder(this)
                 .setTitle("Tracks")
                 .setItems(rows, (d, which) -> trackActions(all.get(which), all.get(which) == cur))
+                .setNeutralButton(cur != null ? "Stop recording" : "Record track", (d, w) -> toggleTrack())
                 .setNegativeButton("Close", null)
                 .show();
     }
@@ -685,7 +1007,7 @@ public class MainActivity extends Activity implements Repo.Listener {
                     }, () -> shareFile("GPX track", file, "application/gpx+xml",
                             (out, done) -> repo.tracks.exportGpx(t.id, out, repo.myCall(), done)));
                 })
-                .setNegativeButton("Close", null);
+                .setNegativeButton("Map", (d, w) -> showTrackOnMap(t));
         if (!recording) {
             b.setNeutralButton("Delete", (d, w) -> new AlertDialog.Builder(this)
                     .setMessage("Delete " + t.title() + "?")
@@ -928,8 +1250,9 @@ public class MainActivity extends Activity implements Repo.Listener {
             else {
                 autoLine.setVisibility(View.VISIBLE);
                 long next = plan.next();
-                autoLine.setText("📍 every " + plan.minutes + " min"
-                        + (next > System.currentTimeMillis() ? " · next " + hhmm(next) : "")
+                autoLine.setText("📍 " + plan.label()
+                        + (plan.smart != null ? (plan.lastSent > 0 ? " · last sent " + hhmm(plan.lastSent) : "")
+                            : next > System.currentTimeMillis() ? " · next " + hhmm(next) : "")
                         + (plan.until != 0 ? " · until " + hhmm(plan.until) : "")
                         + (repo.state() == Repo.State.STOPPED ? " · paused: radio connection is off"
                             : plan.problem != null ? " · " + plan.problem : ""));
@@ -958,11 +1281,14 @@ public class MainActivity extends Activity implements Repo.Listener {
                 if (pos != null) {
                     String where = Format.dm(pos.lat, pos.lon);
                     String how = (pos.blur == PositionShare.Blur.EXACT ? "exact" : pos.blur.label.toLowerCase(Locale.US))
-                            + " · tap to open map";
+                            + " · tap for the map";
                     b.setText("📍 " + where + "\n" + how);
                     b.setTypeface(Ui.mono());
                     b.setTextSize(13);
-                    b.setOnClickListener(v -> openMap(pos.lat, pos.lon, m.outgoing ? "Sent to " + peer : m.from()));
+                    b.setOnClickListener(v -> {
+                        dialog.dismiss();
+                        showOnMap(m.outgoing ? "Sent to " + peer : m.from(), pos.lat, pos.lon);
+                    });
                     if (m.outgoing) b.setOnLongClickListener(v -> { messageOptions(m); return true; });
                 } else {
                     b.setText(m.text);
@@ -1044,16 +1370,37 @@ public class MainActivity extends Activity implements Repo.Listener {
                 + "while the radio connection is on. A newer position replaces one still waiting for an ack.");
         android.widget.RadioGroup every = new android.widget.RadioGroup(this);
         every.setOrientation(LinearLayout.HORIZONTAL);
-        int pickMin = now != null ? now.minutes : 30;
+        SmartBeacon.Profile[] profiles = SmartBeacon.Profile.values();
+        for (SmartBeacon.Profile sp : profiles) {
+            android.widget.RadioButton rb = new android.widget.RadioButton(this);
+            rb.setId(2900 + sp.ordinal());
+            rb.setText(sp == SmartBeacon.Profile.DRIVING ? "🚗 Smart" : "🚶 Smart");
+            every.addView(rb);
+        }
         for (int m : AutoPosition.MINUTES) {
             android.widget.RadioButton rb = new android.widget.RadioButton(this);
             rb.setId(2000 + m);
             rb.setText(m < 60 ? m + "m" : (m / 60) + "h");
             every.addView(rb);
         }
-        every.check(2000 + pickMin);
+        every.check(now != null && now.smart != null ? 2900 + now.smart.profile.ordinal()
+                : 2000 + (now != null ? now.minutes : 30));
         android.widget.HorizontalScrollView everyScroll = new android.widget.HorizontalScrollView(this);
         everyScroll.addView(every);
+        TextView everyHelp = label("");
+        everyHelp.setTextSize(13);
+        Runnable explain = () -> {
+            int id = every.getCheckedRadioButtonId();
+            if (id >= 2900) {
+                SmartBeacon.Profile sp = profiles[id - 2900];
+                everyHelp.setText(sp.label + ": checks the GPS every " + (sp.checkMs / 60_000) + " min and sends every "
+                        + (sp.fastMs / 60_000) + " min at " + Math.round(sp.fastMph) + " mph or faster, less often when "
+                        + "slower, every " + (sp.slowMs / 60_000) + " min when stopped, and soon after a turn or a stop.");
+                everyHelp.setVisibility(View.VISIBLE);
+            } else everyHelp.setVisibility(View.GONE);
+        };
+        every.setOnCheckedChangeListener((g, id) -> explain.run());
+        explain.run();
         android.widget.RadioGroup prec = new android.widget.RadioGroup(this);
         PositionShare.Blur[] blurs = PositionShare.Blur.values();
         for (int i = 0; i < blurs.length; i++) {
@@ -1072,11 +1419,11 @@ public class MainActivity extends Activity implements Repo.Listener {
         }
         stop.check(3000 + 12);
         box.addView(how);
-        box.addView(label("Every:")); box.addView(everyScroll);
+        box.addView(label("Every:")); box.addView(everyScroll); box.addView(everyHelp);
         box.addView(label("How precise:")); box.addView(prec);
         box.addView(label("Stop:")); box.addView(stop);
         if (now != null) {
-            TextView st = label("Now: every " + now.minutes + " min, " + now.blur.label.toLowerCase(Locale.US)
+            TextView st = label("Now: " + now.label() + ", " + now.blur.label.toLowerCase(Locale.US)
                     + (now.until == 0 ? ", until turned off" : ", until " + hhmm(now.until))
                     + (now.lastSent > 0 ? ". Last sent " + hhmm(now.lastSent) : "")
                     + (now.problem != null ? ". " + now.problem : "") + ".");
@@ -1088,13 +1435,15 @@ public class MainActivity extends Activity implements Repo.Listener {
                 .setTitle("Send my position to " + peer + " regularly")
                 .setView(sv)
                 .setPositiveButton(now == null ? "Start" : "Update", (d, w) -> {
-                    int minutes = every.getCheckedRadioButtonId() - 2000;
+                    int id = every.getCheckedRadioButtonId();
+                    SmartBeacon.Profile smart = id >= 2900 ? profiles[id - 2900] : null;
+                    int minutes = smart != null ? 0 : id - 2000;
                     int idx = Math.max(0, prec.getCheckedRadioButtonId() - 1000);
                     int hours = stop.getCheckedRadioButtonId() - 3000;
                     withLocation(() -> {
-                        String err = repo.startAuto(peer, minutes, blurs[idx], hours);
+                        String err = repo.startAuto(peer, minutes, smart, blurs[idx], hours);
                         if (err != null) toast(err);
-                        else toast("Sending your position to " + peer + " every " + minutes + " min");
+                        else toast("Sending your position to " + peer + " " + repo.auto.get(peer).label());
                     });
                 })
                 .setNegativeButton("Cancel", null);
@@ -1240,11 +1589,17 @@ public class MainActivity extends Activity implements Repo.Listener {
     }
 
     private void confirmClear() {
-        new AlertDialog.Builder(this)
-                .setMessage("Clear all heard stations and the packet log?")
-                .setPositiveButton("Clear", (d, w) -> repo.clear())
-                .setNegativeButton("Cancel", null)
-                .show();
+        repo.historySize(n -> {
+            if (isFinishing()) return;
+            String kept = n[0] == 0 ? "" : " (" + String.format(Locale.US, "%,d", n[0]) + " packets since "
+                    + new SimpleDateFormat("d MMM", Locale.US).format(new Date(n[1])) + ")";
+            new AlertDialog.Builder(this)
+                    .setMessage("Clear all heard stations and the 30-day packet history" + kept
+                            + "? The weather graphs start again from empty too.")
+                    .setPositiveButton("Clear", (d, w) -> repo.clear())
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        });
     }
 
     private boolean bluetoothOn() {
@@ -1407,10 +1762,220 @@ public class MainActivity extends Activity implements Repo.Listener {
         if (pos != null) {
             final double la = pos.lat, lo = pos.lon;
             final String label = s.name;
-            b.setPositiveButton("Map", (d, w) -> openMap(la, lo, label));   // short: three buttons fit in one row
+            b.setPositiveButton("Map", (d, w) -> showOnMap(label, la, lo));   // short: three buttons fit in one row
         }
-        if (!s.object) b.setNeutralButton("Message", (d, w) -> openConversation(s.name));
+        if (s.wx != null) b.setNeutralButton("Weather", (d, w) -> weatherDialog(s.name));
+        else if (!s.object) b.setNeutralButton("Message", (d, w) -> openConversation(s.name));
         b.show();
+    }
+
+    // ---------------------------------------------------------------- weather
+
+    private static final long DAY = 86_400_000L;
+    private static final long[] WX_RANGES = {DAY, 3 * DAY, 7 * DAY, 30 * DAY};
+    private static final String[] WX_RANGE_NAMES = {"24 h", "3 days", "7 days", "30 days"};
+    /** Points per graph: 15 minutes, 1 hour, 2 hours, 6 hours each. */
+    private static final int[] WX_BUCKETS = {96, 72, 84, 120};
+
+    /** Weather stations heard in the last 30 days, newest first. */
+    private void weatherListDialog() {
+        repo.weatherStations(list -> {
+            if (isFinishing()) return;
+            if (list.isEmpty()) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Weather")
+                        .setMessage("No weather reports heard in the last 30 days. Weather stations show up here "
+                                + "as they're heard, with graphs of everything they send.")
+                        .setPositiveButton("OK", null)
+                        .show();
+                return;
+            }
+            long now = System.currentTimeMillis();
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(16), dp(4), dp(16), dp(8));
+            TextView head = label(list.size() + (list.size() == 1 ? " station" : " stations")
+                    + " heard in the last 30 days · tap one for graphs");
+            head.setTextSize(13);
+            head.setPadding(dp(4), 0, dp(4), dp(6));
+            box.addView(head);
+            AlertDialog[] dlg = new AlertDialog[1];
+            for (History.WxStation w : list) box.addView(weatherRow(w, now, () -> {
+                if (dlg[0] != null) dlg[0].dismiss();
+                weatherDialog(w.name);
+            }));
+            ScrollView sv = new ScrollView(this);
+            sv.addView(box);
+            dlg[0] = new AlertDialog.Builder(this)
+                    .setTitle("Weather")
+                    .setView(sv)
+                    .setNegativeButton("Close", null)
+                    .show();
+        });
+    }
+
+    /** One weather station: name, town and age on the left, temperature large on the right. */
+    private View weatherRow(History.WxStation w, long now, Runnable open) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(12), dp(14), dp(12));
+        row.setBackground(Ui.box(this, Ui.SURFACE, Ui.BORDER, 14));
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(v -> open.run());
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+        TextView name = new TextView(this);
+        name.setText(w.name);
+        name.setTypeface(Ui.monoBold());
+        name.setTextSize(16);
+        name.setTextColor(Ui.accent);
+        left.addView(name);
+        TextView where = new TextView(this);
+        where.setText((w.place != null ? w.place + " · " : "") + Format.ago(now - w.last));
+        where.setTextSize(13);
+        where.setTextColor(Ui.text);
+        left.addView(where);
+        List<String> bits = new ArrayList<>();
+        if (!Double.isNaN(w.wind)) {
+            String dir = Double.isNaN(w.dir) || w.wind < 1 ? "" : Format.compass(w.dir) + " ";
+            bits.add(w.wind < 1 ? "Calm" : "Wind " + dir + Math.round(w.wind) + " mph"
+                    + (!Double.isNaN(w.gust) && w.gust > w.wind + 2 ? ", gusts " + Math.round(w.gust) : ""));
+        }
+        if (!Double.isNaN(w.hum)) bits.add(Math.round(w.hum) + "% humidity");
+        if (!bits.isEmpty()) {
+            TextView more = new TextView(this);
+            more.setText(String.join(" · ", bits));
+            more.setTextSize(12);
+            more.setTextColor(Ui.muted);
+            left.addView(more);
+        }
+        row.addView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView temp = new TextView(this);
+        temp.setText(Double.isNaN(w.temp) ? "–" : Math.round(w.temp) + "°");
+        temp.setTextSize(30);
+        temp.setTypeface(Ui.monoBold());
+        temp.setTextColor(Ui.text);
+        temp.setPadding(dp(12), 0, 0, 0);
+        row.addView(temp);
+        row.setContentDescription(w.name + (w.place != null ? ", " + w.place : "") + ", "
+                + (Double.isNaN(w.temp) ? "no temperature" : Math.round(w.temp) + " degrees") + ". " + String.join(", ", bits));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(8);
+        row.setLayoutParams(lp);
+        return row;
+    }
+
+    /** Small graphs of one station's weather: 24 hours to 30 days. */
+    private void weatherDialog(String name) {
+        repo.weather(name, System.currentTimeMillis() - WX_RANGES[WX_RANGES.length - 1], samples -> {
+            if (isFinishing()) return;
+            android.content.SharedPreferences prefs = getSharedPreferences("settings", MODE_PRIVATE);
+            int[] sel = {Math.max(0, Math.min(WX_RANGES.length - 1, prefs.getInt("wx_range", 0)))};
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(20), dp(8), dp(20), dp(8));
+            LinearLayout chips = new LinearLayout(this);
+            chips.setOrientation(LinearLayout.HORIZONTAL);
+            TextView status = label("");
+            status.setTextSize(13);
+            LinearLayout graphs = new LinearLayout(this);
+            graphs.setOrientation(LinearLayout.VERTICAL);
+            Button[] btns = new Button[WX_RANGES.length];
+            Runnable[] draw = new Runnable[1];
+            for (int i = 0; i < btns.length; i++) {
+                final int k = i;
+                btns[i] = button(WX_RANGE_NAMES[i], v -> {
+                    sel[0] = k;
+                    prefs.edit().putInt("wx_range", k).apply();
+                    draw[0].run();
+                });
+                btns[i].setTextSize(13);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+                if (i > 0) lp.leftMargin = dp(6);
+                chips.addView(btns[i], lp);
+            }
+            draw[0] = () -> {
+                for (int i = 0; i < btns.length; i++) {
+                    if (i == sel[0]) Ui.filled(btns[i], 12); else Ui.plain(btns[i]);
+                    btns[i].setTextSize(13);
+                }
+                fillWeather(graphs, status, name, samples, sel[0]);
+            };
+            box.addView(chips);
+            box.addView(status);
+            box.addView(graphs);
+            draw[0].run();
+            ScrollView sv = new ScrollView(this);
+            sv.addView(box);
+            Station st = repo.store.get(name);
+            AlertDialog.Builder b = new AlertDialog.Builder(this)
+                    .setTitle((st != null ? Symbols.icon(st.symTable(), st.symCode()) + "  " : "") + name)
+                    .setView(sv)
+                    .setPositiveButton("Close", null);
+            if (st != null) b.setNeutralButton("Station", (d, w) -> showStation(st));
+            b.show();
+        });
+    }
+
+    private void fillWeather(LinearLayout graphs, TextView status, String name, List<WxHistory.Sample> all, int range) {
+        graphs.removeAllViews();
+        long to = System.currentTimeMillis(), from = to - WX_RANGES[range];
+        int n = WX_BUCKETS[range];
+        List<WxHistory.Sample> in = new ArrayList<>();
+        for (WxHistory.Sample x : all) if (x.time >= from) in.add(x);
+        if (in.isEmpty()) {
+            status.setText("No weather reports from " + name + " in the last " + WX_RANGE_NAMES[range]
+                    + (all.isEmpty() ? "." : ". Try a longer time."));
+            return;
+        }
+        String town = repo.placeName(name);
+        status.setText((town != null ? town + " · " : "") + in.size() + (in.size() == 1 ? " report" : " reports") + " · newest "
+                + Format.ago(to - in.get(in.size() - 1).time) + " · drag across a graph to read it");
+        WxHistory.Field T = WxHistory.Field.TEMP, H = WxHistory.Field.HUMIDITY, P = WxHistory.Field.PRESSURE,
+                W = WxHistory.Field.WIND, G = WxHistory.Field.GUST, D = WxHistory.Field.WIND_DIR,
+                R1 = WxHistory.Field.RAIN_1H, R24 = WxHistory.Field.RAIN_24H;
+        if (WxHistory.has(in, T)) addGraph(graphs, in, T, null, from, to, n, lowHigh(in, T, from), null);
+        if (WxHistory.has(in, H)) addGraph(graphs, in, H, null, from, to, n, lowHigh(in, H, from), null);
+        if (WxHistory.has(in, P)) {
+            double ch = WxHistory.change(in, P, 3 * 3_600_000L);
+            String trend = Double.isNaN(ch) ? "" : Math.abs(ch) < 1 ? " · steady" + " over 3 h"
+                    : (ch > 0 ? " · rising " : " · falling ") + String.format(Locale.US, "%.1f mb in 3 h", Math.abs(ch));
+            addGraph(graphs, in, P, null, from, to, n, lowHigh(in, P, from) + trend, null);
+        }
+        if (WxHistory.has(in, W) || WxHistory.has(in, G)) {
+            double dir = WxHistory.latest(in, D), gust = WxHistory.latest(in, G);
+            double[] gr = WxHistory.range(in, G, from);
+            String value = W.format(WxHistory.latest(in, W)) + (Double.isNaN(gust) ? "" : ", gust " + Math.round(gust));
+            String sub = (Double.isNaN(dir) ? "" : "from " + Format.compass(dir) + " · ")
+                    + (Double.isNaN(gr[1]) ? "average speed" : "strongest gust " + G.format(gr[1]) + " · light line: gusts");
+            addGraph(graphs, in, W, WxHistory.has(in, G) ? G : null, from, to, n, sub, value);
+        }
+        if (WxHistory.has(in, R1)) {
+            double total = WxHistory.rainTotal(in, from, to);
+            String sub = Double.isNaN(total) || total == 0 ? "no rain" : "about " + R1.format(total) + " in total";
+            addGraph(graphs, in, R1, null, from, to, n, sub, null);
+        } else if (WxHistory.has(in, R24)) {
+            addGraph(graphs, in, R24, null, from, to, n, "each point: rain in the 24 hours before it", null);
+        }
+    }
+
+    private static String lowHigh(List<WxHistory.Sample> in, WxHistory.Field f, long from) {
+        double[] r = WxHistory.range(in, f, from);
+        return "low " + f.format(r[0]) + " · high " + f.format(r[1]);
+    }
+
+    private void addGraph(LinearLayout graphs, List<WxHistory.Sample> in, WxHistory.Field f, WxHistory.Field f2,
+                          long from, long to, int n, String sub, String value) {
+        WxGraph g = new WxGraph(this);
+        g.set(f.label, value != null ? value : f.format(WxHistory.latest(in, f)), sub,
+                f, WxHistory.buckets(in, f, from, to, n),
+                f2, f2 == null ? null : WxHistory.buckets(in, f2, from, to, n), from, to);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(14);
+        graphs.addView(g, lp);
     }
 
     private void showPacket(Station.Heard h) {
@@ -1459,6 +2024,786 @@ public class MainActivity extends Activity implements Repo.Listener {
         } catch (ActivityNotFoundException e) {
             toast("No map app installed");
         }
+    }
+
+    // ---------------------------------------------------------------- map tab
+
+    /** Opens the Map tab on a station's position (or a pin, for a position not on a station). */
+    private void showOnMap(String name, double lat, double lon) {
+        selectTab(TAB_MAP);
+        mapPane.focus(name, lat, lon);
+    }
+
+    private void showTrackOnMap(io.github.deadly447.h9ops.track.Track t) {
+        String json;
+        synchronized (repo.tracks) { json = MapJson.track(t); }   // a recording track is still growing
+        selectTab(TAB_MAP);
+        mapPane.setTrack(json);
+    }
+
+    /** Full screen: only the map, until ⛶ or Back. */
+    private void setMapFull(boolean on) {
+        mapFull = on;
+        int v = on ? View.GONE : View.VISIBLE;
+        headerView.setVisibility(v);
+        radioCard.root.setVisibility(v);
+        tabsView.setVisibility(v);
+        footer.setVisibility(v);
+    }
+
+    @Override public void mapStation(String name) {
+        Station s = repo.store.get(name);
+        if (s != null) showStation(s);
+    }
+
+    @Override public void mapNavigate(double lat, double lon, String label) { openMap(lat, lon, label); }
+
+    @Override public void mapMe() { withLocation(this::mapFix); }
+
+    @Override public void mapFull() { setMapFull(!mapFull); }
+
+    /** The map's renderer was stopped (crash or memory): start a fresh one if the tab is open. */
+    @Override public void mapGone() {
+        if (mapPane == null) return;
+        mapHolder.removeView(mapPane.web);
+        mapPane.destroy();
+        mapPane = null;
+        if (tab == TAB_MAP) selectTab(TAB_MAP);
+    }
+
+    /** One GPS fix for the map's ◎ button. Only when tapped: the map never follows you by itself. */
+    private void mapFix() {
+        oneFix(l -> {
+            if (mapPane == null) return;
+            if (l == null) mapPane.meFailed();
+            else mapPane.setMe(l.getLatitude(), l.getLongitude(), l.hasAccuracy() ? l.getAccuracy() : 0);
+        });
+    }
+
+    /** One GPS fix (a recent one if there is one), or null after a minute without. Call inside withLocation. */
+    @SuppressWarnings({"deprecation", "MissingPermission"})
+    private void oneFix(java.util.function.Consumer<android.location.Location> then) {
+        android.location.LocationManager lm = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+        if (lm == null || !lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)) {
+            toast("Turn on location (GPS) in the phone's settings");
+            then.accept(null);
+            return;
+        }
+        final boolean[] done = {false};
+        java.util.function.Consumer<android.location.Location> got = l -> {
+            if (done[0]) return;
+            done[0] = true;
+            if (l == null) toast("No GPS fix");
+            then.accept(l);
+        };
+        android.location.Location last = lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER);
+        if (last != null && System.currentTimeMillis() - last.getTime() < 120_000) {
+            got.accept(last);
+            return;
+        }
+        toast("Getting a GPS fix…");
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.os.CancellationSignal cancel = new android.os.CancellationSignal();
+            lm.getCurrentLocation(android.location.LocationManager.GPS_PROVIDER, cancel, getMainExecutor(), got::accept);
+            ui.postDelayed(() -> { if (!done[0]) { cancel.cancel(); got.accept(null); } }, 60_000);
+        } else {
+            android.location.LocationListener listener = new android.location.LocationListener() {
+                @Override public void onLocationChanged(android.location.Location l) { lm.removeUpdates(this); got.accept(l); }
+                @Override public void onStatusChanged(String p, int st, Bundle b) { }
+                @Override public void onProviderEnabled(String p) { }
+                @Override public void onProviderDisabled(String p) { }
+            };
+            lm.requestSingleUpdate(android.location.LocationManager.GPS_PROVIDER, listener, Looper.getMainLooper());
+            ui.postDelayed(() -> { if (!done[0]) { lm.removeUpdates(listener); got.accept(null); } }, 60_000);
+        }
+    }
+
+    @Override public void mapLongPress(double lat, double lon) {
+        new AlertDialog.Builder(this)
+                .setTitle(String.format(Locale.US, "%.5f, %.5f", lat, lon))
+                .setItems(new String[]{"Place an object here…", "Alert area here…", "Navigate here"}, (d, w) -> {
+                    if (w == 0) objectDialog(lat, lon);
+                    else if (w == 1) areaDialog(lat, lon);
+                    else openMap(lat, lon, "Map point");
+                })
+                .show();
+    }
+
+    @Override public void mapRemoveObject(String name) {
+        new AlertDialog.Builder(this)
+                .setMessage("Remove the object " + name + "? It is sent three more times as removed, so other "
+                        + "maps drop it too.")
+                .setPositiveButton("Remove", (d, w) -> repo.removeObject(name))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    // ---------------------------------------------------------------- alerts
+
+    private void alertsDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(8));
+        box.addView(label("Alert when one of these is heard (again after 30 minutes without it). Commas or "
+                + "spaces between; N0CALL-* means any SSID."));
+        EditText watch = edit(String.join(", ", repo.alerts.watch()), "N0CALL-7, N0CALL-*");
+        watch.setSingleLine(false);
+        watch.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        box.addView(watch);
+        CheckBox em = new CheckBox(this);
+        em.setText("Emergency packets: a Mic-E emergency, an EMERG object, or EMERGENCY in a comment or status");
+        em.setChecked(repo.alerts.emergency());
+        box.addView(em);
+        box.addView(label("Areas (alert when a station goes in or out). Long-press the map to add one."));
+        AlertDialog[] self = {null};
+        List<io.github.deadly447.h9ops.aprs.Alerts.Area> areas = repo.alerts.areas();
+        if (areas.isEmpty()) box.addView(label("No areas yet."));
+        for (io.github.deadly447.h9ops.aprs.Alerts.Area a : areas) {
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            TextView t = new TextView(this);
+            t.setText("⚑ " + a.name + " · " + String.format(Locale.US, "%.2g mi", a.radiusM / io.github.deadly447.h9ops.aprs.Alerts.M_PER_MILE)
+                    + " · " + (a.calls.isEmpty() ? "any station" : String.join(" ", a.calls)));
+            t.setTextColor(Ui.text);
+            t.setTextSize(14);
+            row.addView(t, weight());
+            row.addView(button("Map", v -> { if (self[0] != null) self[0].dismiss(); showOnMap("⚑ " + a.name, a.lat, a.lon); }));
+            row.addView(button("Remove", v -> {
+                repo.removeAlertArea(a.name);
+                if (self[0] != null) self[0].dismiss();
+                alertsDialog();
+            }));
+            box.addView(row);
+        }
+        box.addView(label("Alerts are notifications (Settings → Notifications → H9 OPS to change their sound). "
+                + "The lock screen only says there is one, not who or where."));
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        self[0] = new AlertDialog.Builder(this)
+                .setTitle("Alerts")
+                .setView(sv)
+                .setPositiveButton("Save", (d, w) -> {
+                    repo.setAlerts(watch.getText().toString(), em.isChecked());
+                    toast("Alerts saved");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void areaDialog(double lat, double lon) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(8));
+        box.addView(label("Name"));
+        EditText name = edit("Area " + (repo.alerts.areas().size() + 1), "Camp, Search area 2…");
+        box.addView(name);
+        box.addView(label("Size (radius)"));
+        android.widget.RadioGroup g = new android.widget.RadioGroup(this);
+        double[] r = io.github.deadly447.h9ops.aprs.Alerts.RADIUS_MILES;
+        for (int i = 0; i < r.length; i++) {
+            android.widget.RadioButton rb = new android.widget.RadioButton(this);
+            rb.setId(2000 + i);
+            rb.setText((r[i] < 1 ? String.format(Locale.US, "%.2g", r[i]) : String.format(Locale.US, "%.0f", r[i])) + " mi");
+            g.addView(rb);
+        }
+        g.check(2002);
+        box.addView(g);
+        box.addView(label("Only these stations (empty = any station)"));
+        EditText calls = edit("", "N0CALL-*, N0CALL-9");
+        calls.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        box.addView(calls);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        new AlertDialog.Builder(this)
+                .setTitle("Alert area")
+                .setView(sv)
+                .setPositiveButton("Save", (d, w) -> {
+                    String n = name.getText().toString().replaceAll("[\\t\\n|]", " ").trim();
+                    if (n.length() > 24) n = n.substring(0, 24).trim();
+                    if (n.isEmpty()) n = "Area";
+                    double miles = r[Math.max(0, g.getCheckedRadioButtonId() - 2000)];
+                    repo.putAlertArea(new io.github.deadly447.h9ops.aprs.Alerts.Area(n, lat, lon,
+                            miles * io.github.deadly447.h9ops.aprs.Alerts.M_PER_MILE,
+                            io.github.deadly447.h9ops.aprs.Alerts.parseCalls(calls.getText().toString())));
+                    toast("Alert area " + n + " set");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    // ---------------------------------------------------------------- objects and bulletins
+
+    private void objectsDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(8));
+        box.addView(label("Objects you place go out on the APRS channel under your callsign every few minutes, "
+                + "until you remove them, and every APRS map that hears them shows them: a command post, a "
+                + "staging area, a hazard. To place one, long-press the map, or use your position."));
+        AlertDialog[] self = {null};
+        List<io.github.deadly447.h9ops.aprs.Broadcasts.Obj> objs = repo.broadcasts.objects();
+        if (objs.isEmpty()) box.addView(label("None on the air."));
+        for (io.github.deadly447.h9ops.aprs.Broadcasts.Obj o : objs) {
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            TextView t = new TextView(this);
+            t.setText(Symbols.icon(o.table, o.code) + " " + o.name + " · every " + o.minutes + " min"
+                    + (o.comment.isEmpty() ? "" : "\n" + o.comment));
+            t.setTextColor(Ui.text);
+            t.setTextSize(14);
+            row.addView(t, weight());
+            row.addView(button("Map", v -> { if (self[0] != null) self[0].dismiss(); showOnMap(o.name, o.lat, o.lon); }));
+            row.addView(button("Remove", v -> {
+                repo.removeObject(o.name);
+                if (self[0] != null) self[0].dismiss();
+                objectsDialog();
+            }));
+            box.addView(row);
+        }
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        self[0] = new AlertDialog.Builder(this)
+                .setTitle("My objects")
+                .setView(sv)
+                .setPositiveButton("At my position…", (d, w) -> withLocation(() -> oneFix(l -> {
+                    if (l != null) objectDialog(l.getLatitude(), l.getLongitude());
+                })))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void objectDialog(double lat, double lon) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(8));
+        box.addView(label("Name (up to 9 characters; the same name moves it)"));
+        EditText name = edit("", "ICP, STAGING…");
+        name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(io.github.deadly447.h9ops.aprs.Broadcasts.MAX_NAME)});
+        box.addView(name);
+        box.addView(label("Symbol"));
+        android.widget.RadioGroup sym = new android.widget.RadioGroup(this);
+        String[][] syms = io.github.deadly447.h9ops.aprs.Broadcasts.SYMBOLS;
+        for (int i = 0; i < syms.length; i++) {
+            android.widget.RadioButton rb = new android.widget.RadioButton(this);
+            rb.setId(3000 + i);
+            rb.setText(Symbols.icon(syms[i][0].charAt(0), syms[i][1].charAt(0)) + "  " + syms[i][2]);
+            sym.addView(rb);
+        }
+        sym.check(3000);
+        box.addView(sym);
+        box.addView(label("Comment (optional, up to 43 characters)"));
+        EditText comment = edit("", "Frequency, contact, what's here");
+        comment.setFilters(new InputFilter[]{new InputFilter.LengthFilter(io.github.deadly447.h9ops.aprs.Broadcasts.MAX_OBJECT_COMMENT)});
+        box.addView(comment);
+        box.addView(label("Send it again every"));
+        android.widget.RadioGroup every = new android.widget.RadioGroup(this);
+        every.setOrientation(LinearLayout.HORIZONTAL);
+        int[] mins = io.github.deadly447.h9ops.aprs.Broadcasts.OBJECT_MINUTES;
+        for (int i = 0; i < mins.length; i++) {
+            android.widget.RadioButton rb = new android.widget.RadioButton(this);
+            rb.setId(4000 + i);
+            rb.setText(mins[i] + " min  ");
+            every.addView(rb);
+        }
+        every.check(4001);
+        box.addView(every);
+        box.addView(label("It's a transmission under your callsign (" + (repo.myCall() == null ? "set it in Settings" : repo.myCall())
+                + "), in plain text like all APRS."));
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        new AlertDialog.Builder(this)
+                .setTitle(String.format(Locale.US, "Object at %.5f, %.5f", lat, lon))
+                .setView(sv)
+                .setPositiveButton("Place", (d, w) -> {
+                    String[] sy = syms[Math.max(0, sym.getCheckedRadioButtonId() - 3000)];
+                    String err = repo.placeObject(name.getText().toString(), lat, lon, sy[0].charAt(0), sy[1].charAt(0),
+                            comment.getText().toString(), mins[Math.max(0, every.getCheckedRadioButtonId() - 4000)]);
+                    if (err != null) toast(err);
+                    else toast(repo.canTransmit() ? "Object placed" : "Object saved: it goes out when the radio is connected");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void bulletinsDialog() {
+        repo.board.seen();
+        refreshList();
+        long now = System.currentTimeMillis();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(8));
+        AlertDialog[] self = {null};
+        for (io.github.deadly447.h9ops.aprs.Broadcasts.Bln b : repo.broadcasts.bulletins()) {
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            TextView t = new TextView(this);
+            t.setText("Sending " + b.addressee() + ": " + b.text);
+            t.setTextColor(Ui.accent);
+            t.setTextSize(14);
+            row.addView(t, weight());
+            row.addView(button("Stop", v -> {
+                repo.stopBulletin(b.line);
+                if (self[0] != null) self[0].dismiss();
+                bulletinsDialog();
+            }));
+            box.addView(row);
+        }
+        List<io.github.deadly447.h9ops.aprs.BulletinBoard.Entry> l = repo.board.entries(now);
+        if (l.isEmpty()) box.addView(label("No bulletins heard in the last two days. Bulletins are messages to "
+                + "everyone (BLN0–BLN9, BLNA–BLNZ for announcements), for nets and searches."));
+        for (io.github.deadly447.h9ops.aprs.BulletinBoard.Entry e : l) {
+            TextView h = new TextView(this);
+            h.setText(e.to + " · " + (e.mine ? "you" : e.from) + " · " + Format.ago(now - e.last)
+                    + (e.count > 1 ? " · ×" + e.count : ""));
+            h.setTypeface(Ui.mono());
+            h.setTextColor(Ui.muted);
+            h.setTextSize(12);
+            h.setPadding(0, dp(10), 0, 0);
+            TextView t = new TextView(this);
+            t.setText(e.text);
+            t.setTextColor(Ui.text);
+            t.setTextSize(15);
+            t.setTextIsSelectable(true);
+            box.addView(h);
+            box.addView(t);
+        }
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        self[0] = new AlertDialog.Builder(this)
+                .setTitle("Bulletins")
+                .setView(sv)
+                .setPositiveButton("Send bulletin…", (d, w) -> sendBulletinDialog())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void sendBulletinDialog() {
+        if (!readyToSend()) return;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(8));
+        box.addView(label("Line: 0–9 for bulletins, A–Z for announcements. Sending on a line you used replaces it."));
+        EditText line = edit("0", "0");
+        line.setFilters(new InputFilter[]{new InputFilter.LengthFilter(1)});
+        line.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        box.addView(line);
+        box.addView(label("Text (up to 67 characters)"));
+        EditText text = edit("", "Net tonight 1900 on 146.520");
+        text.setFilters(new InputFilter[]{new InputFilter.LengthFilter(io.github.deadly447.h9ops.aprs.Broadcasts.MAX_BULLETIN)});
+        box.addView(text);
+        android.widget.RadioGroup rep = new android.widget.RadioGroup(this);
+        String[] reps = {"Once", "Every 10 min for 1 hour", "Every 10 min for 4 hours"};
+        for (int i = 0; i < reps.length; i++) {
+            android.widget.RadioButton rb = new android.widget.RadioButton(this);
+            rb.setId(5000 + i);
+            rb.setText(reps[i]);
+            rep.addView(rb);
+        }
+        rep.check(5001);
+        box.addView(rep);
+        box.addView(label("Bulletins go to everyone listening, in plain text, and aren't acknowledged."));
+        new AlertDialog.Builder(this)
+                .setTitle("Send a bulletin")
+                .setView(box)
+                .setPositiveButton("Send", (d, w) -> {
+                    int hours = io.github.deadly447.h9ops.aprs.Broadcasts.BULLETIN_HOURS[Math.max(0, rep.getCheckedRadioButtonId() - 5000)];
+                    String err = repo.sendBulletin(line.getText().toString(), text.getText().toString(), hours);
+                    toast(err != null ? err : "Bulletin sent");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** Map file…: what's installed, and add, replace or remove it. */
+    // ---- overlays: GPX / KML / KMZ trail plans and search areas drawn on the map ----
+
+    private io.github.deadly447.h9ops.map.Overlays overlayStore;
+
+    private io.github.deadly447.h9ops.map.Overlays overlays() {
+        if (overlayStore == null) overlayStore = new io.github.deadly447.h9ops.map.Overlays(new java.io.File(getFilesDir(), "overlays"));
+        return overlayStore;
+    }
+
+    private void overlaysDialog() {
+        List<io.github.deadly447.h9ops.map.Overlays.Entry> list = overlays().list();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(4), dp(20), dp(4));
+        TextView how = label("Trail plans, search areas and waypoints from a GPX, KML or KMZ file (CalTopo, Gaia, "
+                + "onX, Google Earth, ATAK). They're drawn in green on the Map tab. Tick to show or hide, tap a name "
+                + "to zoom to it or remove it.");
+        how.setTextSize(13);
+        box.addView(how);
+        if (list.isEmpty()) box.addView(label("No overlays yet."));
+        AlertDialog[] dlg = new AlertDialog[1];
+        for (io.github.deadly447.h9ops.map.Overlays.Entry e : list) {
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            CheckBox cb = new CheckBox(this);
+            cb.setChecked(e.visible);
+            cb.setContentDescription("Show " + e.name);
+            cb.setOnCheckedChangeListener((v, on) -> {
+                overlays().setVisible(e.id, on);
+                if (mapPane != null) mapPane.overlaysChanged(null);
+            });
+            row.addView(cb);
+            TextView t = new TextView(this);
+            t.setText(e.name + "\n" + e.summary);
+            t.setTextColor(Ui.text);
+            t.setTextSize(14);
+            t.setPadding(dp(4), dp(10), 0, dp(10));
+            t.setOnClickListener(v -> new AlertDialog.Builder(this)
+                    .setTitle(e.name)
+                    .setMessage(e.summary)
+                    .setPositiveButton("Show on map", (d, w) -> {
+                        if (dlg[0] != null) dlg[0].dismiss();
+                        showOverlay(e.id);
+                    })
+                    .setNeutralButton("Remove", (d, w) -> {
+                        overlays().remove(e.id);
+                        if (mapPane != null) mapPane.overlaysChanged(null);
+                        if (dlg[0] != null) dlg[0].dismiss();
+                        overlaysDialog();
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show());
+            row.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            box.addView(row);
+        }
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        dlg[0] = new AlertDialog.Builder(this)
+                .setTitle("Map overlays")
+                .setView(sv)
+                .setPositiveButton("Add file…", (d, w) -> {
+                    Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                            .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/gpx+xml",
+                                    "application/vnd.google-earth.kml+xml", "application/vnd.google-earth.kmz",
+                                    "application/xml", "text/xml", "application/octet-stream", "*/*"});
+                    try { startActivityForResult(i, REQ_OVERLAY); }
+                    catch (ActivityNotFoundException ex) { toast("This phone has no file picker"); }
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void showOverlay(String id) {
+        overlays().setVisible(id, true);
+        selectTab(TAB_MAP);
+        mapPane.overlaysChanged(id);
+    }
+
+    /** Reads a chosen GPX/KML/KMZ in the background, keeps what it draws, and shows it on the map. */
+    private void importOverlay(Uri uri) {
+        String name = "overlay";
+        try (android.database.Cursor c = getContentResolver().query(uri,
+                new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) name = c.getString(0);
+        } catch (RuntimeException ignored) { }
+        final String fileName = name;
+        toast("Reading " + fileName + "…");
+        new Thread(() -> {
+            String err = null;
+            io.github.deadly447.h9ops.map.Overlays.Entry added = null;
+            try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                if (in == null) throw new java.io.IOException("Couldn't open the file");
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[1 << 16];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                    if (out.size() > io.github.deadly447.h9ops.map.Overlay.MAX_BYTES)
+                        throw new java.io.IOException("The file is too big for a map overlay (over 20 MB)");
+                }
+                io.github.deadly447.h9ops.map.Overlay o = io.github.deadly447.h9ops.map.Overlay.parse(out.toByteArray(), fileName);
+                synchronized (this) { added = overlays().add(o); }
+            } catch (java.io.IOException | RuntimeException e) {
+                err = e.getMessage() == null ? e.toString() : e.getMessage();
+            }
+            final String e2 = err;
+            final io.github.deadly447.h9ops.map.Overlays.Entry a2 = added;
+            runOnUiThread(() -> {
+                if (e2 != null) {
+                    new AlertDialog.Builder(this).setTitle("Couldn't add " + fileName).setMessage(e2)
+                            .setPositiveButton("OK", null).show();
+                    return;
+                }
+                toast("Added " + a2.name + ": " + a2.summary);
+                showOverlay(a2.id);
+            });
+        }).start();
+    }
+
+    private void mapFileDialog() {
+        java.io.File path = MapPane.mapFile(this);
+        String info;
+        if (path.isFile()) {
+            try (MapFile f = MapFile.open(path)) {
+                info = f.header.describe() + "\n" + mb(f.size) + ", added " + time(path.lastModified());
+            } catch (java.io.IOException e) {
+                info = "The map file can't be read: " + e.getMessage();
+            }
+        } else {
+            info = "No map yet. Stations still show on the Map tab, on a plain background.";
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(4), dp(20), dp(8));
+        TextView t = label(info + "\n\nThe map is one file for your area (a Protomaps .pmtiles file), kept "
+                + "on this phone. The app has no internet access, so it never downloads maps: you make the file "
+                + "once on a computer and copy it here.");
+        box.addView(t);
+        AlertDialog[] dlg = new AlertDialog[1];
+        Button get = button("Get a map for your area…", v -> { if (dlg[0] != null) dlg[0].dismiss(); getMapDialog(); });
+        Ui.filled(get, 12);
+        Button choose = button(path.isFile() ? "Replace with another file…" : "Choose the map file…", v -> {
+            if (dlg[0] != null) dlg[0].dismiss();
+            pickMapFile();
+        });
+        for (Button bt : new Button[]{get, choose}) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+            lp.topMargin = dp(10);
+            box.addView(bt, lp);
+        }
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle("Offline map")
+                .setView(sv)
+                .setNegativeButton("Close", null);
+        if (path.isFile()) {
+            b.setNeutralButton("Remove", (d, w) -> new AlertDialog.Builder(this)
+                    .setMessage("Remove the offline map? (" + mb(path.length()) + ")")
+                    .setPositiveButton("Remove", (d2, w2) -> {
+                        if (!path.delete()) toast("Couldn't remove it");
+                        if (mapPane != null) mapPane.load();
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show());
+        }
+        dlg[0] = b.show();
+    }
+
+    /**
+     * How to make a map file for this area: the guide (in the browser), the pmtiles tool, and the
+     * exact command for a box around where the map was last looking (or this phone's last GPS fix).
+     */
+    private void getMapDialog() {
+        double lat = Double.NaN, lon = Double.NaN;
+        android.content.SharedPreferences mp = getSharedPreferences("map", MODE_PRIVATE);
+        if (mp.contains("lat")) { lat = mp.getFloat("lat", 0); lon = mp.getFloat("lon", 0); }
+        if (Double.isNaN(lat) && checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            android.location.LocationManager lm = getSystemService(android.location.LocationManager.class);
+            android.location.Location last = null;
+            try {
+                if (lm != null) last = lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER);
+                if (last == null && lm != null) last = lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER);
+            } catch (RuntimeException ignored) { }
+            if (last != null) { lat = last.getLatitude(); lon = last.getLongitude(); }
+        }
+        final double cLat = lat, cLon = lon;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(4), dp(20), dp(8));
+        box.addView(label("1. On a computer, get the free pmtiles tool (Windows, Mac or Linux).\n"
+                + "2. Run the command below. It cuts your area out of Protomaps' free world map (OpenStreetMap "
+                + "data) into one file, h9-map.pmtiles.\n"
+                + "3. Copy that file to this phone (USB, a cloud drive, email) and choose it in Map file….\n\n"
+                + "The guide has the same steps with pictures and other ways to choose an area."));
+        TextView cmd = new TextView(this);
+        cmd.setTypeface(Ui.mono());
+        cmd.setTextSize(12);
+        cmd.setTextColor(Ui.text);
+        cmd.setTextIsSelectable(true);
+        cmd.setPadding(dp(12), dp(10), dp(12), dp(10));
+        cmd.setBackground(Ui.box(this, Ui.SURFACE, Ui.BORDER, 10));
+        TextView size = label("");
+        size.setTextSize(13);
+        String[] current = new String[1];
+        android.widget.RadioGroup area = new android.widget.RadioGroup(this);
+        area.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < io.github.deadly447.h9ops.map.MapRecipe.MILES.length; i++) {
+            android.widget.RadioButton rb = new android.widget.RadioButton(this);
+            rb.setId(4000 + i);
+            rb.setText(io.github.deadly447.h9ops.map.MapRecipe.MILES[i] + " mi");
+            area.addView(rb);
+        }
+        Runnable update = () -> {
+            int i = Math.max(0, area.getCheckedRadioButtonId() - 4000);
+            int miles = io.github.deadly447.h9ops.map.MapRecipe.MILES[i];
+            if (Double.isNaN(cLat)) {
+                current[0] = null;
+                cmd.setText("No position yet: open the Map tab and move to your area, or allow location, then come "
+                        + "back. The guide shows how to pick an area by hand.");
+                size.setText("");
+            } else {
+                current[0] = io.github.deadly447.h9ops.map.MapRecipe.command(cLat, cLon, miles, System.currentTimeMillis());
+                cmd.setText(current[0]);
+                size.setText("A box " + miles + " miles each way from " + String.format(Locale.US, "%.2f, %.2f", cLat, cLon)
+                        + (mp.contains("lat") ? " (where the map was last looking)" : " (this phone's last GPS fix)")
+                        + ". The file will be " + io.github.deadly447.h9ops.map.MapRecipe.roughSize(miles) + ".");
+            }
+        };
+        area.setOnCheckedChangeListener((g, id) -> update.run());
+        area.check(4001);
+        box.addView(label("Area around:"));
+        box.addView(area);
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        cl.topMargin = dp(6);
+        box.addView(cmd, cl);
+        box.addView(size);
+        LinearLayout row = new LinearLayout(this);
+        row.addView(button("Copy", v -> {
+            if (current[0] == null) { toast("No command yet"); return; }
+            android.content.ClipboardManager cb = getSystemService(android.content.ClipboardManager.class);
+            if (cb != null) cb.setPrimaryClip(android.content.ClipData.newPlainText("pmtiles command", current[0]));
+            toast("Copied");
+        }), weight());
+        Button share = button("Send to computer…", v -> {
+            if (current[0] == null) { toast("No command yet"); return; }
+            Intent i = new Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "Map for H9 OPS")
+                    .putExtra(Intent.EXTRA_TEXT, "Get the pmtiles tool: " + io.github.deadly447.h9ops.map.MapRecipe.TOOL_URL
+                            + "\n\nThen run:\n" + current[0]
+                            + "\n\nCopy h9-map.pmtiles to the phone and choose it in H9 OPS → Map file….\n"
+                            + "Guide: " + io.github.deadly447.h9ops.map.MapRecipe.GUIDE_URL);
+            try { startActivity(Intent.createChooser(i, "Send the map command")); }
+            catch (ActivityNotFoundException e) { toast("Nothing on this phone can share text"); }
+        });
+        LinearLayout.LayoutParams sl = weight();
+        sl.leftMargin = dp(8);
+        row.addView(share, sl);
+        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        rl.topMargin = dp(8);
+        box.addView(row, rl);
+        LinearLayout links = new LinearLayout(this);
+        links.addView(button("Open the guide", v -> openLink(io.github.deadly447.h9ops.map.MapRecipe.GUIDE_URL)), weight());
+        Button tool = button("Get pmtiles tool", v -> openLink(io.github.deadly447.h9ops.map.MapRecipe.TOOL_URL));
+        LinearLayout.LayoutParams tl = weight();
+        tl.leftMargin = dp(8);
+        links.addView(tool, tl);
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        ll.topMargin = dp(8);
+        box.addView(links, ll);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        new AlertDialog.Builder(this)
+                .setTitle("Get a map for your area")
+                .setView(sv)
+                .setPositiveButton("I have the file…", (d, w) -> pickMapFile())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    @Override public void mapGetMap() { getMapDialog(); }
+
+    /** Opens a web page in the phone's browser (the app itself has no internet access). */
+    private void openLink(String url) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (ActivityNotFoundException e) { toast("No browser on this phone: " + url); }
+    }
+
+    private static String mb(long bytes) {
+        return String.format(Locale.US, "%.0f MB", bytes / 1048576.0);
+    }
+
+    private void pickMapFile() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*");     // .pmtiles has no MIME type of its own
+        try { startActivityForResult(i, REQ_MAP_FILE); }
+        catch (ActivityNotFoundException e) { toast("This phone has no file picker"); }
+    }
+
+    /** Copies a chosen map file into the app's storage, checking it is a vector PMTiles map first. */
+    private void importMap(Uri uri) {
+        long total = -1;
+        try (android.database.Cursor c = getContentResolver().query(uri,
+                new String[]{android.provider.OpenableColumns.SIZE}, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) total = c.getLong(0);
+        } catch (RuntimeException ignored) { }
+        java.io.File dest = MapPane.mapFile(this);
+        java.io.File dir = dest.getParentFile();
+        if (dir != null && !dir.isDirectory() && !dir.mkdirs()) { toast("Couldn't make the map folder"); return; }
+        if (total > 0 && dir != null && dir.getUsableSpace() < total + 64L * 1048576) {
+            new AlertDialog.Builder(this).setTitle("Not enough space")
+                    .setMessage("The map needs " + mb(total) + " and the phone has " + mb(dir.getUsableSpace()) + " free.")
+                    .setPositiveButton("OK", null).show();
+            return;
+        }
+        final long size = total;
+        TextView msg = new TextView(this);
+        msg.setTextSize(14);
+        msg.setTypeface(Ui.mono());
+        msg.setPadding(dp(24), dp(16), dp(24), dp(8));
+        msg.setText("Checking the file…");
+        final boolean[] cancelled = {false}, finished = {false};
+        AlertDialog dlg = new AlertDialog.Builder(this).setTitle("Adding the map").setView(msg)
+                .setNegativeButton("Cancel", (d, w) -> cancelled[0] = true)
+                .setCancelable(false).create();
+        dlg.show();
+        java.io.File tmp = new java.io.File(dir, "area.pmtiles.part");
+        new Thread(() -> {
+            String err = null;
+            try (java.io.InputStream in = getContentResolver().openInputStream(uri);
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+                if (in == null) throw new java.io.IOException("Couldn't open the file");
+                byte[] head = new byte[MapFile.HEADER_LEN];
+                int got = 0;
+                while (got < head.length) {
+                    int n = in.read(head, got, head.length - got);
+                    if (n < 0) break;
+                    got += n;
+                }
+                MapFile.Header.parse(got == head.length ? head : java.util.Arrays.copyOf(head, got));
+                out.write(head);
+                byte[] buf = new byte[1 << 16];
+                long done = head.length, shown = 0;
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    if (cancelled[0]) throw new java.io.IOException("Cancelled");
+                    out.write(buf, 0, n);
+                    done += n;
+                    long now = System.currentTimeMillis();
+                    if (now - shown > 250) {
+                        shown = now;
+                        final long d = done;
+                        runOnUiThread(() -> msg.setText("Copying… " + mb(d) + (size > 0 ? " of " + mb(size) : "")));
+                    }
+                }
+                out.getFD().sync();
+            } catch (java.io.IOException | RuntimeException e) {
+                err = e.getMessage() != null ? e.getMessage() : e.toString();
+            }
+            final String error = err;
+            runOnUiThread(() -> {
+                finished[0] = true;
+                if (dlg.isShowing()) dlg.dismiss();
+                if (error != null) {
+                    if (!tmp.delete()) tmp.deleteOnExit();
+                    if (!cancelled[0]) new AlertDialog.Builder(this).setTitle("Couldn't add the map")
+                            .setMessage(error).setPositiveButton("OK", null).show();
+                    return;
+                }
+                if (!tmp.renameTo(dest)) {
+                    toast("Couldn't save the map");
+                    if (!tmp.delete()) tmp.deleteOnExit();
+                    return;
+                }
+                String what;
+                try (MapFile f = MapFile.open(dest)) { what = f.header.describe(); }
+                catch (java.io.IOException e) { what = "Map saved"; }
+                toast("Map added: " + what);
+                if (mapPane != null) mapPane.load();
+                selectTab(TAB_MAP);
+            });
+        }, "map-import").start();
     }
 
     private void copy(String s) {

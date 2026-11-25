@@ -7,8 +7,9 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Timed position sharing: send my position to one station every N minutes,
- * as a normal position message.
+ * Timed position sharing: send my position to one station every N minutes, or
+ * "smart" (more often when moving, see {@link SmartBeacon}), as a normal position
+ * message.
  * This class only decides *when*; the app gets the GPS fix and sends.
  *
  * Every plan has an end time by default, so a forgotten plan can't keep
@@ -21,11 +22,16 @@ public final class AutoPosition {
     public static final int[] STOP_HOURS = {1, 4, 12, 24, 0};
     /** When no GPS fix was possible, try again this soon instead of waiting a full interval. */
     public static final long NO_FIX_RETRY_MS = 5 * 60_000L;
+    /** Smart plans check every minute or two; after a failed fix, wait a little longer. */
+    static final long SMART_RETRY_MS = 3 * 60_000L;
     static final long NEVER = Long.MIN_VALUE;
 
     public static final class Plan {
         public final String peer;
+        /** Fixed interval, minutes; 0 for a smart plan. */
         public final int minutes;
+        /** Smart plan state, or null for a fixed interval. */
+        public final SmartBeacon smart;
         public final PositionShare.Blur blur;
         /** Stop at this time (ms), or 0 for "until turned off". */
         public final long until;
@@ -36,14 +42,21 @@ public final class AutoPosition {
         /** Why the last attempt didn't send, or null. */
         public String problem;
 
-        Plan(String peer, int minutes, PositionShare.Blur blur, long until) {
+        Plan(String peer, int minutes, SmartBeacon.Profile smart, PositionShare.Blur blur, long until) {
             this.peer = peer;
-            this.minutes = minutes;
+            this.minutes = smart == null ? minutes : 0;
+            this.smart = smart == null ? null : new SmartBeacon(smart);
             this.blur = blur;
             this.until = until;
         }
 
-        public long intervalMs() { return minutes * 60_000L; }
+        /** Time between sends (fixed plan) or between GPS checks (smart plan). */
+        public long intervalMs() { return smart != null ? smart.profile.checkMs : minutes * 60_000L; }
+
+        /** "every 30 min" or "smart: driving". */
+        public String label() {
+            return smart != null ? smart.profile.label.toLowerCase(Locale.US) : "every " + minutes + " min";
+        }
 
         /** When the next send is due (ms). */
         public long next() { return lastTry == NEVER ? Long.MIN_VALUE : lastTry + intervalMs(); }
@@ -53,9 +66,14 @@ public final class AutoPosition {
 
     /** Starts (or replaces) a plan. The first send is due straight away. */
     public Plan start(String peer, int minutes, PositionShare.Blur blur, int stopHours, long now) {
-        if (minutes < 1) throw new IllegalArgumentException("interval");
+        return start(peer, minutes, null, blur, stopHours, now);
+    }
+
+    /** Starts (or replaces) a plan: every {@code minutes}, or smart when {@code smart} isn't null. */
+    public Plan start(String peer, int minutes, SmartBeacon.Profile smart, PositionShare.Blur blur, int stopHours, long now) {
+        if (smart == null && minutes < 1) throw new IllegalArgumentException("interval");
         String p = peer.toUpperCase(Locale.US);
-        Plan plan = new Plan(p, minutes, blur, stopHours > 0 ? now + stopHours * 3_600_000L : 0);
+        Plan plan = new Plan(p, minutes, smart, blur, stopHours > 0 ? now + stopHours * 3_600_000L : 0);
         plans.put(p, plan);
         return plan;
     }
@@ -89,9 +107,16 @@ public final class AutoPosition {
         p.problem = null;
     }
 
+    /** Smart plan: the GPS was checked and there was no reason to send yet. */
+    public void checked(Plan p, long now) {
+        p.lastTry = now;
+        p.problem = null;
+    }
+
     /** No fix (or no permission): try again in a few minutes, not a full interval. */
     public void failed(Plan p, long now, String why) {
-        p.lastTry = now - p.intervalMs() + Math.min(NO_FIX_RETRY_MS, p.intervalMs());
+        long retry = p.smart != null ? SMART_RETRY_MS : Math.min(NO_FIX_RETRY_MS, p.intervalMs());
+        p.lastTry = now - p.intervalMs() + retry;
         p.problem = why;
     }
 
@@ -107,12 +132,14 @@ public final class AutoPosition {
         return best;
     }
 
-    // ---- saving: one line per plan: PEER|minutes|blur|until|lastTry|lastSent
+    // ---- saving: one line per plan: PEER|minutes|blur|until|lastTry|lastSent|smart
+    // (smart is the profile name or "-"; lines from 1.25 and older have no 7th field)
 
     public List<String> save() {
         List<String> out = new ArrayList<>();
         for (Plan p : plans.values()) {
-            out.add(p.peer + "|" + p.minutes + "|" + p.blur.name() + "|" + p.until + "|" + p.lastTry + "|" + p.lastSent);
+            out.add(p.peer + "|" + p.minutes + "|" + p.blur.name() + "|" + p.until + "|" + p.lastTry + "|" + p.lastSent
+                    + "|" + (p.smart == null ? "-" : p.smart.profile.name()));
         }
         return out;
     }
@@ -121,13 +148,14 @@ public final class AutoPosition {
         plans.clear();
         for (String l : lines) {
             String[] f = l.split("\\|");
-            if (f.length != 6 || !Ax25.validCall(f[0])) continue;
+            if ((f.length != 6 && f.length != 7) || !Ax25.validCall(f[0])) continue;
             try {
                 int minutes = Integer.parseInt(f[1]);
                 PositionShare.Blur blur = PositionShare.Blur.valueOf(f[2]);
                 long until = Long.parseLong(f[3]);
-                if (minutes < 1 || (until != 0 && until <= now)) continue;
-                Plan p = new Plan(f[0], minutes, blur, until);
+                SmartBeacon.Profile smart = f.length == 7 && !f[6].equals("-") ? SmartBeacon.Profile.valueOf(f[6]) : null;
+                if ((smart == null && minutes < 1) || (until != 0 && until <= now)) continue;
+                Plan p = new Plan(f[0], minutes, smart, blur, until);
                 long lt = Long.parseLong(f[4]);
                 p.lastTry = lt == NEVER ? NEVER : Math.min(lt, now);
                 p.lastSent = Math.min(Long.parseLong(f[5]), now);
