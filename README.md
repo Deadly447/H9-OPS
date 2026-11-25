@@ -19,8 +19,38 @@ as a message to one station, when you tap 📍 or on a timer you set.
 > finds the radio but can't connect ("This radio has no KISS service").
 > See [Radio firmware](#radio-firmware-p2) below.
 
+## Why it works this way
+
+I built H9 OPS for emergency preparedness: for the day the cell towers are
+down, the power is out, or you're simply somewhere with no signal, and you
+still need to know where your people are and talk to them. Every design choice
+comes back to four things.
+
+- **Self-reliance when the grid is down.** Nothing in the app depends on the
+  internet, a cell signal, a server or an account. Phone and radio are
+  enough: messages go radio to radio, positions come off the air, and the
+  map, the weather history and your tracks live on the phone. If it works on
+  a good day, it works the same on a bad one.
+- **Privacy.** The app has no internet permission at all, so it can't send
+  anything anywhere, and nobody has to take my word for that: Android shows
+  it on the install screen. No analytics, no ads, no sign-in, no cloud. Your
+  data stays on your phone and isn't included in cloud backups.
+- **Safety.** You decide when your position leaves the phone: a tap, or a
+  timer you set that always has an end time. Positions can be rounded, the
+  app never beacons on its own, and messages ask iGates not to put them on
+  the internet (NOGATE).
+- **Security.** Less to go wrong and less to trust: no third-party code
+  besides two small open-source map libraries bundled with the app, offline
+  maps instead of a map service that sees where you look, and the source is
+  here for anyone to read and build.
+
+The trade-off is a little more setup, such as making your own map file once
+(see [MAPS.md](MAPS.md)). That's on purpose: the setup happens while things
+are calm, so nothing has to be fetched when they aren't.
+
 ## Contents
 
+- [Why it works this way](#why-it-works-this-way)
 - [Radio firmware (P2)](#radio-firmware-p2)
 - [Install](#install)
 - [Getting started](#getting-started)
