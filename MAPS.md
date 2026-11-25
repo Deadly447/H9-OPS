@@ -102,7 +102,19 @@ Add `--dry-run` to see the real size before downloading.
 Any **picture map** works too, shown as it is over the street map: a USGS topo
 map, a satellite map, a scanned trail map. It must be an **MBTiles** or
 **PMTiles** file of PNG, JPEG or WebP tiles. USGS topo maps are public domain;
-one way to make the file, with the free [QGIS](https://qgis.org):
+the easiest way to make the file is the small script in this repo,
+[tools/h9topo.py](tools/h9topo.py). It needs only Python 3 and downloads your
+area straight into one MBTiles file:
+
+```
+python h9topo.py --bbox=-105.53,39.78,-104.97,40.22 --maxzoom=15 topo.mbtiles
+```
+
+`--bbox` is west,south,east,north, the same as pmtiles. Zoom 15 is where topo
+text is readable: about 250–350 MB for a 50-mile square. If it stops, run the
+same command again and it carries on.
+
+Or with the free [QGIS](https://qgis.org):
 
 1. In QGIS, **Browser → XYZ Tiles → New Connection**, with the URL
    `https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}`,
