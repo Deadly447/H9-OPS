@@ -822,7 +822,7 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
     // ---- exports and the developer log ----
 
     private static final int REQ_EXPORT_PACKETS = 41, REQ_EXPORT_DEV = 42, REQ_EXPORT_TRACK = 43, REQ_MAP_FILE = 44,
-            REQ_OVERLAY = 45;
+            REQ_OVERLAY = 45, REQ_TERRAIN_FILE = 46;
     private String exportTrackId;
 
     private static String stamp() {
@@ -915,7 +915,8 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
     protected void onActivityResult(int req, int result, Intent data) {
         super.onActivityResult(req, result, data);
         if (result != RESULT_OK || data == null || data.getData() == null) return;
-        if (req == REQ_MAP_FILE) { importMap(data.getData()); return; }
+        if (req == REQ_MAP_FILE) { importMap(data.getData(), false); return; }
+        if (req == REQ_TERRAIN_FILE) { importMap(data.getData(), true); return; }
         if (req == REQ_OVERLAY) { importOverlay(data.getData()); return; }
         if (req != REQ_EXPORT_PACKETS && req != REQ_EXPORT_DEV && req != REQ_EXPORT_TRACK) return;
         java.io.OutputStream out;
@@ -2537,8 +2538,8 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
     }
 
     private void mapFileDialog() {
-        java.io.File path = MapPane.mapFile(this);
-        String info;
+        java.io.File path = MapPane.mapFile(this), tpath = MapPane.terrainFile(this);
+        String info, tinfo;
         if (path.isFile()) {
             try (MapFile f = MapFile.open(path)) {
                 info = f.header.describe() + "\n" + mb(f.size) + ", added " + time(path.lastModified());
@@ -2548,49 +2549,93 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         } else {
             info = "No map yet. Stations still show on the Map tab, on a plain background.";
         }
+        if (tpath.isFile()) {
+            try (io.github.deadly447.h9ops.map.TileSource t = io.github.deadly447.h9ops.map.Terrain.open(tpath)) {
+                boolean dem = io.github.deadly447.h9ops.map.TerrainKind.of(
+                        getSharedPreferences("map", MODE_PRIVATE).getString("terrain_kind", "picture")).elevation();
+                tinfo = (dem ? "Elevation: shading, contour lines and the height under the crosshair.\n"
+                        : "Picture map, shown over the street map.\n")
+                        + t.describe() + "\n" + mb(t.size()) + ", added " + time(tpath.lastModified());
+            } catch (java.io.IOException | RuntimeException e) {
+                tinfo = "The terrain file can't be read: " + e.getMessage();
+            }
+        } else {
+            tinfo = "No terrain yet. Add elevation data to see the shape of the ground (shading and contour "
+                    + "lines), or a topo map such as a USGS one.";
+        }
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(4), dp(20), dp(8));
-        TextView t = label(info + "\n\nThe map is one file for your area (a Protomaps .pmtiles file), kept "
-                + "on this phone. The app has no internet access, so it never downloads maps: you make the file "
-                + "once on a computer and copy it here.");
-        box.addView(t);
         AlertDialog[] dlg = new AlertDialog[1];
-        Button get = button("Get a map for your area…", v -> { if (dlg[0] != null) dlg[0].dismiss(); getMapDialog(); });
+        Runnable close = () -> { if (dlg[0] != null) dlg[0].dismiss(); };
+
+        box.addView(section("STREET MAP"));
+        box.addView(label(info + "\n\nOne file for your area (a Protomaps .pmtiles file), kept on this phone. The app "
+                + "has no internet access, so it never downloads maps: you make the file once on a computer and "
+                + "copy it here."));
+        Button get = button("Get a map for your area…", v -> { close.run(); getMapDialog(false); });
         Ui.filled(get, 12);
-        Button choose = button(path.isFile() ? "Replace with another file…" : "Choose the map file…", v -> {
-            if (dlg[0] != null) dlg[0].dismiss();
-            pickMapFile();
-        });
-        for (Button bt : new Button[]{get, choose}) {
+        addButtons(box, get,
+                button(path.isFile() ? "Replace with another file…" : "Choose the map file…",
+                        v -> { close.run(); pickMapFile(false); }),
+                path.isFile() ? button("Remove the street map", v -> { close.run(); removeMapFile(false); }) : null);
+
+        box.addView(section("TERRAIN"));
+        box.addView(label(tinfo + "\n\nElevation tiles (Mapterhorn's free terrain, or any Terrarium or Terrain-RGB "
+                + "file) or a picture map (PMTiles or MBTiles). Tap ⛰ on the map to show or hide it."));
+        Button tget = button("Get terrain for your area…", v -> { close.run(); getMapDialog(true); });
+        if (!tpath.isFile()) Ui.filled(tget, 12);
+        addButtons(box, tget,
+                button(tpath.isFile() ? "Replace with another file…" : "Choose a terrain or topo file…",
+                        v -> { close.run(); pickMapFile(true); }),
+                tpath.isFile() ? button("Remove the terrain", v -> { close.run(); removeMapFile(true); }) : null);
+
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        dlg[0] = new AlertDialog.Builder(this)
+                .setTitle("Offline map")
+                .setView(sv)
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private TextView section(String title) {
+        TextView t = label(title);
+        t.setTypeface(Ui.monoBold());
+        t.setTextSize(12);
+        t.setTextColor(Ui.accent);
+        t.setPadding(0, dp(16), 0, dp(4));
+        return t;
+    }
+
+    private void addButtons(LinearLayout box, Button... buttons) {
+        for (Button bt : buttons) {
+            if (bt == null) continue;
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
             lp.topMargin = dp(10);
             box.addView(bt, lp);
         }
-        ScrollView sv = new ScrollView(this);
-        sv.addView(box);
-        AlertDialog.Builder b = new AlertDialog.Builder(this)
-                .setTitle("Offline map")
-                .setView(sv)
-                .setNegativeButton("Close", null);
-        if (path.isFile()) {
-            b.setNeutralButton("Remove", (d, w) -> new AlertDialog.Builder(this)
-                    .setMessage("Remove the offline map? (" + mb(path.length()) + ")")
-                    .setPositiveButton("Remove", (d2, w2) -> {
-                        if (!path.delete()) toast("Couldn't remove it");
-                        if (mapPane != null) mapPane.load();
-                    })
-                    .setNegativeButton("Cancel", null)
-                    .show());
-        }
-        dlg[0] = b.show();
+    }
+
+    private void removeMapFile(boolean terrain) {
+        java.io.File f = terrain ? MapPane.terrainFile(this) : MapPane.mapFile(this);
+        new AlertDialog.Builder(this)
+                .setMessage((terrain ? "Remove the terrain? (" : "Remove the street map? (") + mb(f.length()) + ")")
+                .setPositiveButton("Remove", (d, w) -> {
+                    if (!f.delete()) toast("Couldn't remove it");
+                    if (terrain) getSharedPreferences("map", MODE_PRIVATE).edit()
+                            .remove("terrain_kind").remove("terrain_px").remove("terrain_on").apply();
+                    if (mapPane != null) mapPane.load();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     /**
      * How to make a map file for this area: the guide (in the browser), the pmtiles tool, and the
      * exact command for a box around where the map was last looking (or this phone's last GPS fix).
      */
-    private void getMapDialog() {
+    private void getMapDialog(boolean terrain) {
         double lat = Double.NaN, lon = Double.NaN;
         android.content.SharedPreferences mp = getSharedPreferences("map", MODE_PRIVATE);
         if (mp.contains("lat")) { lat = mp.getFloat("lat", 0); lon = mp.getFloat("lon", 0); }
@@ -2608,11 +2653,16 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(4), dp(20), dp(8));
+        final String fileName = terrain ? "h9-terrain.pmtiles" : "h9-map.pmtiles";
         box.addView(label("1. On a computer, get the free pmtiles tool (Windows, Mac or Linux).\n"
-                + "2. Run the command below. It cuts your area out of Protomaps' free world map (OpenStreetMap "
-                + "data) into one file, h9-map.pmtiles.\n"
-                + "3. Copy that file to this phone (USB, a cloud drive, email) and choose it in Map file….\n\n"
-                + "The guide has the same steps with pictures and other ways to choose an area."));
+                + "2. Run the command below. It cuts your area out of "
+                + (terrain ? "Mapterhorn's free world terrain (elevation from Copernicus and other open data)"
+                        : "Protomaps' free world map (OpenStreetMap data)")
+                + " into one file, " + fileName + ".\n"
+                + "3. Copy that file to this phone (USB, a cloud drive, email) and choose it in Map file…"
+                + (terrain ? " under Terrain" : "") + ".\n\n"
+                + "The guide has the same steps with pictures"
+                + (terrain ? ", and how to use a USGS topo map instead." : " and other ways to choose an area.")));
         TextView cmd = new TextView(this);
         cmd.setTypeface(Ui.mono());
         cmd.setTextSize(12);
@@ -2640,11 +2690,13 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
                         + "back. The guide shows how to pick an area by hand.");
                 size.setText("");
             } else {
-                current[0] = io.github.deadly447.h9ops.map.MapRecipe.command(cLat, cLon, miles, System.currentTimeMillis());
+                current[0] = terrain ? io.github.deadly447.h9ops.map.MapRecipe.terrainCommand(cLat, cLon, miles)
+                        : io.github.deadly447.h9ops.map.MapRecipe.command(cLat, cLon, miles, System.currentTimeMillis());
                 cmd.setText(current[0]);
                 size.setText("A box " + miles + " miles each way from " + String.format(Locale.US, "%.2f, %.2f", cLat, cLon)
                         + (mp.contains("lat") ? " (where the map was last looking)" : " (this phone's last GPS fix)")
-                        + ". The file will be " + io.github.deadly447.h9ops.map.MapRecipe.roughSize(miles) + ".");
+                        + ". The file will be " + (terrain ? io.github.deadly447.h9ops.map.MapRecipe.roughTerrainSize(miles)
+                        : io.github.deadly447.h9ops.map.MapRecipe.roughSize(miles)) + ".");
             }
         };
         area.setOnCheckedChangeListener((g, id) -> update.run());
@@ -2666,11 +2718,13 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         Button share = button("Send to computer…", v -> {
             if (current[0] == null) { toast("No command yet"); return; }
             Intent i = new Intent(Intent.ACTION_SEND).setType("text/plain")
-                    .putExtra(Intent.EXTRA_SUBJECT, "Map for H9 OPS")
+                    .putExtra(Intent.EXTRA_SUBJECT, terrain ? "Terrain for H9 OPS" : "Map for H9 OPS")
                     .putExtra(Intent.EXTRA_TEXT, "Get the pmtiles tool: " + io.github.deadly447.h9ops.map.MapRecipe.TOOL_URL
                             + "\n\nThen run:\n" + current[0]
-                            + "\n\nCopy h9-map.pmtiles to the phone and choose it in H9 OPS → Map file….\n"
-                            + "Guide: " + io.github.deadly447.h9ops.map.MapRecipe.GUIDE_URL);
+                            + "\n\nCopy " + fileName + " to the phone and choose it in H9 OPS → Map file…"
+                            + (terrain ? " → Terrain" : "") + ".\n"
+                            + "Guide: " + (terrain ? io.github.deadly447.h9ops.map.MapRecipe.TERRAIN_GUIDE_URL
+                            : io.github.deadly447.h9ops.map.MapRecipe.GUIDE_URL));
             try { startActivity(Intent.createChooser(i, "Send the map command")); }
             catch (ActivityNotFoundException e) { toast("Nothing on this phone can share text"); }
         });
@@ -2682,7 +2736,8 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         rl.topMargin = dp(8);
         box.addView(row, rl);
         LinearLayout links = new LinearLayout(this);
-        links.addView(button("Open the guide", v -> openLink(io.github.deadly447.h9ops.map.MapRecipe.GUIDE_URL)), weight());
+        links.addView(button("Open the guide", v -> openLink(terrain ? io.github.deadly447.h9ops.map.MapRecipe.TERRAIN_GUIDE_URL
+                : io.github.deadly447.h9ops.map.MapRecipe.GUIDE_URL)), weight());
         Button tool = button("Get pmtiles tool", v -> openLink(io.github.deadly447.h9ops.map.MapRecipe.TOOL_URL));
         LinearLayout.LayoutParams tl = weight();
         tl.leftMargin = dp(8);
@@ -2694,14 +2749,14 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
         new AlertDialog.Builder(this)
-                .setTitle("Get a map for your area")
+                .setTitle(terrain ? "Get terrain for your area" : "Get a map for your area")
                 .setView(sv)
-                .setPositiveButton("I have the file…", (d, w) -> pickMapFile())
+                .setPositiveButton("I have the file…", (d, w) -> pickMapFile(terrain))
                 .setNegativeButton("Close", null)
                 .show();
     }
 
-    @Override public void mapGetMap() { getMapDialog(); }
+    @Override public void mapGetMap() { getMapDialog(false); }
 
     /** Opens a web page in the phone's browser (the app itself has no internet access). */
     private void openLink(String url) {
@@ -2713,22 +2768,25 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         return String.format(Locale.US, "%.0f MB", bytes / 1048576.0);
     }
 
-    private void pickMapFile() {
+    private void pickMapFile(boolean terrain) {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
                 .setType("*/*");     // .pmtiles has no MIME type of its own
-        try { startActivityForResult(i, REQ_MAP_FILE); }
+        try { startActivityForResult(i, terrain ? REQ_TERRAIN_FILE : REQ_MAP_FILE); }
         catch (ActivityNotFoundException e) { toast("This phone has no file picker"); }
     }
 
-    /** Copies a chosen map file into the app's storage, checking it is a vector PMTiles map first. */
-    private void importMap(Uri uri) {
+    /**
+     * Copies a chosen file into the app's storage, checking it first: a street map must be a
+     * vector PMTiles file; terrain is a PMTiles or MBTiles file of elevation or picture tiles.
+     */
+    private void importMap(Uri uri, boolean terrain) {
         long total = -1;
         try (android.database.Cursor c = getContentResolver().query(uri,
                 new String[]{android.provider.OpenableColumns.SIZE}, null, null, null)) {
             if (c != null && c.moveToFirst() && !c.isNull(0)) total = c.getLong(0);
         } catch (RuntimeException ignored) { }
-        java.io.File dest = MapPane.mapFile(this);
+        java.io.File dest = terrain ? MapPane.terrainFile(this) : MapPane.mapFile(this);
         java.io.File dir = dest.getParentFile();
         if (dir != null && !dir.isDirectory() && !dir.mkdirs()) { toast("Couldn't make the map folder"); return; }
         if (total > 0 && dir != null && dir.getUsableSpace() < total + 64L * 1048576) {
@@ -2744,11 +2802,12 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         msg.setPadding(dp(24), dp(16), dp(24), dp(8));
         msg.setText("Checking the file…");
         final boolean[] cancelled = {false}, finished = {false};
-        AlertDialog dlg = new AlertDialog.Builder(this).setTitle("Adding the map").setView(msg)
+        AlertDialog dlg = new AlertDialog.Builder(this).setTitle(terrain ? "Adding the terrain" : "Adding the map").setView(msg)
                 .setNegativeButton("Cancel", (d, w) -> cancelled[0] = true)
                 .setCancelable(false).create();
         dlg.show();
-        java.io.File tmp = new java.io.File(dir, "area.pmtiles.part");
+        java.io.File tmp = new java.io.File(dir, dest.getName() + ".part");
+        final io.github.deadly447.h9ops.map.Terrain.Info[] tinfo = new io.github.deadly447.h9ops.map.Terrain.Info[1];
         new Thread(() -> {
             String err = null;
             try (java.io.InputStream in = getContentResolver().openInputStream(uri);
@@ -2761,8 +2820,9 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
                     if (n < 0) break;
                     got += n;
                 }
-                MapFile.Header.parse(got == head.length ? head : java.util.Arrays.copyOf(head, got));
-                out.write(head);
+                byte[] h = got == head.length ? head : java.util.Arrays.copyOf(head, got);
+                if (!terrain || !io.github.deadly447.h9ops.map.MbTiles.looksLike(h)) MapFile.Header.parse(h, terrain);
+                out.write(h);
                 byte[] buf = new byte[1 << 16];
                 long done = head.length, shown = 0;
                 int n;
@@ -2778,6 +2838,13 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
                     }
                 }
                 out.getFD().sync();
+                out.close();
+                if (terrain) {
+                    runOnUiThread(() -> msg.setText("Checking the tiles…"));
+                    try (io.github.deadly447.h9ops.map.TileSource t = io.github.deadly447.h9ops.map.Terrain.open(tmp)) {
+                        tinfo[0] = io.github.deadly447.h9ops.map.Terrain.detect(t);
+                    }
+                }
             } catch (java.io.IOException | RuntimeException e) {
                 err = e.getMessage() != null ? e.getMessage() : e.toString();
             }
@@ -2787,13 +2854,22 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
                 if (dlg.isShowing()) dlg.dismiss();
                 if (error != null) {
                     if (!tmp.delete()) tmp.deleteOnExit();
-                    if (!cancelled[0]) new AlertDialog.Builder(this).setTitle("Couldn't add the map")
+                    if (!cancelled[0]) new AlertDialog.Builder(this)
+                            .setTitle(terrain ? "Couldn't add the terrain" : "Couldn't add the map")
                             .setMessage(error).setPositiveButton("OK", null).show();
                     return;
                 }
                 if (!tmp.renameTo(dest)) {
                     toast("Couldn't save the map");
                     if (!tmp.delete()) tmp.deleteOnExit();
+                    return;
+                }
+                if (terrain) {
+                    MapPane.saveTerrainInfo(this, tinfo[0]);
+                    toast(tinfo[0].kind.elevation() ? "Terrain added: shading and contour lines (⛰ on the map)"
+                            : "Topo map added (⛰ on the map shows or hides it)");
+                    if (mapPane != null) mapPane.load();
+                    selectTab(TAB_MAP);
                     return;
                 }
                 String what;

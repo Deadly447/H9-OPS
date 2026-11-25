@@ -59,7 +59,65 @@ Cities make bigger files than open country. To make one smaller, add
 ## Already have a map?
 
 Any **vector** PMTiles file from the Protomaps basemap works, for example one
-you made for another program. Raster maps and MBTiles files can't be read yet.
+you made for another program. Picture maps (topo maps, satellite) go under
+Terrain instead (below).
+
+## Terrain
+
+The street map shows roads, trails, water and places, but not the shape of the
+ground. Add a second file, **terrain**, and the map gets:
+
+- **hill shading**, so ridges and drainages stand out;
+- **contour lines**, every 40 ft zoomed in (200 ft index lines) up to every
+  1,000 ft zoomed out;
+- **the elevation under the crosshair** in the middle of the map, in feet.
+
+Tap **⛰** on the map to show or hide it. The terrain is
+[Mapterhorn](https://mapterhorn.com)'s free elevation data (from Copernicus
+and other open sources), about 15 m detail in the US.
+
+### The quick way (from the app)
+
+**⋮ → Map file… → Get terrain for your area…** works like the street map: pick
+15, 40 or 100 miles, send the command to your computer and run it with the
+same pmtiles tool. It looks like:
+
+```
+pmtiles extract https://download.mapterhorn.com/planet.pmtiles h9-terrain.pmtiles --maxzoom=12 --bbox=-105.5338,39.7826,-104.9662,40.2174
+```
+
+Copy `h9-terrain.pmtiles` to the phone and choose it under **⋮ → Map file… →
+Terrain → Choose a terrain or topo file…**.
+
+| Area | Terrain file (rough) |
+|---|---|
+| 15 miles each way | 10–30 MB |
+| 40 miles each way | 50–150 MB |
+| 100 miles each way (`--maxzoom=11`) | 100–300 MB |
+
+Add `--dry-run` to see the real size before downloading.
+
+### A USGS topo map instead
+
+Any **picture map** works too, shown as it is over the street map: a USGS topo
+map, a satellite map, a scanned trail map. It must be an **MBTiles** or
+**PMTiles** file of PNG, JPEG or WebP tiles. USGS topo maps are public domain;
+one way to make the file, with the free [QGIS](https://qgis.org):
+
+1. In QGIS, **Browser → XYZ Tiles → New Connection**, with the URL
+   `https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}`,
+   and add it to the map.
+2. Zoom to your area.
+3. **Processing → Toolbox → Raster tools → Generate XYZ tiles (MBTiles)**.
+   Extent: *use map canvas extent*; minimum zoom 10, maximum zoom 15 or 16.
+   Run it and save the `.mbtiles` file.
+4. Copy it to the phone and choose it under **Terrain**.
+
+Zoom 16 over a big area makes a very large file: keep the area tight or the
+maximum zoom at 15.
+
+The app works out by itself which kind of file it is (elevation or picture).
+Elevation files in Terrain-RGB encoding (Mapbox style) work too.
 
 ## Trail plans and search areas
 

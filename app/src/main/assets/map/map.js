@@ -9,6 +9,7 @@
   const B = window.H9 || {
     config: () => JSON.stringify(window.H9_TEST_CONFIG || {}),
     ready() {}, station() {}, navigate() {}, view() {}, me() {}, full() {}, longPress() {}, removeObject() {},
+    terrain() {},
   };
 
   const el = (tag, cls, text) => {
@@ -35,6 +36,7 @@
   const st = new Map();               // name -> { d, m, c, t }
   let trailLayer, areaLayer, markLayer, meLayer, trackLayer, alertLayer, overlayLayer;
   let areasKey = "";
+  let terrain = null, terrainOn = false;   // { layer, elevation } from terrain.js
 
   function readColors() {
     const cs = getComputedStyle(document.body);
@@ -79,8 +81,13 @@
       new Grid({ tileSize: 256 }).addTo(map);
       $("note").textContent = "No map for your area yet. Tap here to get one (stations still show).";
       $("note").hidden = false;
+      document.body.classList.add("has-note");
       $("note").style.cursor = "pointer";
       $("note").addEventListener("click", () => B.getMap && B.getMap());
+    }
+    if (cfg.terrain && window.H9terrain) {
+      terrain = H9terrain.create(map, cfg.terrain);
+      setTerrain(cfg.terrain.on !== false, true);
     }
     overlayLayer = L.layerGroup().addTo(map);
     alertLayer = L.layerGroup().addTo(map);
@@ -96,8 +103,14 @@
     else if (cfg.bounds) map.fitBounds([[cfg.bounds[0], cfg.bounds[1]], [cfg.bounds[2], cfg.bounds[3]]]);
     else map.setView([39, -98], 4);
     labels();
+    centerElevation();
     map.on("zoomend", labels);
-    map.on("moveend", () => { const p = map.getCenter(); B.view(p.lat, p.lng, map.getZoom()); });
+    map.on("moveend", () => { const p = map.getCenter(); B.view(p.lat, p.lng, map.getZoom()); centerElevation(); });
+    map.on("move", () => {
+      if (elevQueued) return;
+      elevQueued = true;
+      requestAnimationFrame(() => { elevQueued = false; centerElevation(); });
+    });
     map.on("popupclose", () => { openName = null; });
     // Long-press (or right-click): place an object or an alert area here.
     // (tapHold makes Leaflet raise it on a touch hold; the WebView may raise its own too, so once per hold)
@@ -133,11 +146,48 @@
         });
         btn("⤢", "Show all stations", fitAll);
         btn("〰", "Trails", (b) => { trails = !trails; b.classList.toggle("off", !trails); drawTrails(); });
+        if (terrain) {
+          const t = btn("", "Terrain", () => setTerrain(!terrainOn));
+          // a mountain, drawn (the ⛰ character is missing from some phones' fonts)
+          t.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" style="vertical-align:middle">'
+            + '<path d="M2 20 L9 8 L13 14 L16 10 L22 20 Z" fill="none" stroke="currentColor" stroke-width="2.2" '
+            + 'stroke-linejoin="round"/></svg>';
+          t.id = "terrain-btn";
+          t.classList.toggle("off", !terrainOn);
+        }
         L.DomEvent.disableClickPropagation(bar);
         return bar;
       },
     });
     new Bar().addTo(map);
+  }
+
+  // ---------------------------------------------------------------- terrain
+
+  function setTerrain(on, first) {
+    terrainOn = on;
+    if (on) terrain.layer.addTo(map);
+    else map.removeLayer(terrain.layer);
+    const b = $("terrain-btn");
+    if (b) b.classList.toggle("off", !on);
+    const showElev = on && !!terrain.elevation;
+    $("elev").hidden = !showElev;
+    document.body.classList.toggle("has-elev", showElev);
+    $("cross").hidden = !showElev;
+    if (showElev) centerElevation();
+    if (!first) B.terrain(on);
+  }
+
+  // The height under the crosshair in the middle of the map.
+  let elevSeq = 0, elevQueued = false;
+  function centerElevation() {
+    if (!terrainOn || !terrain || !terrain.elevation || !map._loaded) return;
+    const seq = ++elevSeq;
+    const c = map.getCenter();
+    terrain.elevation(c.lat, c.lng).then((m) => {
+      if (seq !== elevSeq) return;
+      $("elev").textContent = m == null ? "▲ —" : "▲ " + Math.round(m * H9terrain.FT).toLocaleString("en-US") + " ft";
+    });
   }
 
   function labels() {

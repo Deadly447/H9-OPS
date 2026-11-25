@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0
+
+- **Terrain on the map:** hill shading, contour lines (every 40 ft zoomed in,
+  200 ft index lines, up to 1,000 ft zoomed out) and the elevation under a
+  crosshair in the middle of the map. It comes from a second offline file:
+  **⋮ → Map file… → Get terrain for your area…** gives the command for
+  Mapterhorn's free elevation data (about 15 m detail). **⛰** on the map shows
+  or hides it.
+- **Topo maps:** a picture map (PMTiles or MBTiles of PNG, JPEG or WebP, for
+  example a USGS topo map exported from QGIS) can be added under Terrain
+  instead, and is shown over the street map. See [MAPS.md](MAPS.md#terrain).
+
 ## 1.1.2
 
 - New app icon in the app's own look: "H9" inside the radio card's corner

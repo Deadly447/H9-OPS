@@ -5,6 +5,7 @@
 <li>APRS messaging radio to radio, with acknowledgements, retries and delivery ticks</li>
 <li>Send your position to one station, exact or rounded, once, on a timer, or with smart timing (more often when moving)</li>
 <li>Offline map from a map file you make for your area, with GPX/KML overlays for trail plans and search areas</li>
+<li>Terrain: hill shading, contour lines and elevation from a free offline elevation file, or a USGS topo map</li>
 <li>Weather stations kept for 30 days, with small graphs</li>
 <li>Alerts for watched callsigns, areas and emergency packets; objects and bulletins</li>
 <li>Track recording with GPX export; night red mode</li>

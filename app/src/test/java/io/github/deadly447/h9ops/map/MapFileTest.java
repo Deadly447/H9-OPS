@@ -198,4 +198,54 @@ public class MapFileTest {
             assertTrue(f.delete());
         }
     }
+
+    @Test
+    public void terrainFilesArePictures() throws IOException {
+        MapFile.Header png = MapFile.Header.parse(header(3, 2), true);
+        assertEquals("image/png", png.mime());
+        assertEquals("image/webp", MapFile.Header.parse(header(3, 4), true).mime());
+        assertEquals("image/jpeg", MapFile.Header.parse(header(3, 3), true).mime());
+        assertTrue(png.describe().startsWith("PNG tiles, zoom 0–15"));
+        try {
+            MapFile.Header.parse(header(3, 1), true);
+            fail("took a street map as terrain");
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Map file"));
+        }
+        try {
+            MapFile.Header.parse(header(3, 5), true);
+            fail("took AVIF");
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("AVIF"));
+        }
+        try {
+            MapFile.Header.parse(header(3, 2));
+            fail("took terrain as a street map");
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Terrain"));
+        }
+    }
+
+    @Test
+    public void readsMetadata() throws IOException {
+        File f = File.createTempFile("map", ".pmtiles");
+        try {
+            byte[] meta = "{\"attribution\":\"Mapterhorn\",\"encoding\":\"terrarium\"}".getBytes("UTF-8");
+            byte[] h = header(3, 4);
+            ByteBuffer b = ByteBuffer.wrap(h).order(ByteOrder.LITTLE_ENDIAN);
+            b.putLong(24, MapFile.HEADER_LEN);
+            b.putLong(32, meta.length);
+            h[97] = 1;                 // internal compression none
+            try (FileOutputStream out = new FileOutputStream(f)) {
+                out.write(h);
+                out.write(meta);
+            }
+            try (MapFile m = MapFile.open(f, true)) {
+                assertTrue(m.metadata().contains("terrarium"));
+                assertEquals("image/webp", m.mime());
+            }
+        } finally {
+            assertTrue(f.delete());
+        }
+    }
 }

@@ -19,4 +19,11 @@ public class MapRecipeTest {
         double[] edge = MapRecipe.bbox(89, 179.9, 100);       // clamped at the poles and the date line
         assertTrue(edge[3] <= 85 && edge[2] <= 180);
     }
+
+    @Test
+    public void terrainCommand() {
+        assertEquals("pmtiles extract https://download.mapterhorn.com/planet.pmtiles h9-terrain.pmtiles "
+                + "--maxzoom=12 --bbox=-105.5338,39.7826,-104.9662,40.2174", MapRecipe.terrainCommand(40.0, -105.25, 15));
+        assertTrue(MapRecipe.terrainCommand(40.0, -105.25, 100).contains("--maxzoom=11"));
+    }
 }

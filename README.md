@@ -242,6 +242,14 @@ a button to send it to your computer, and links to the free tool and the
 guide. Full steps: **[MAPS.md](MAPS.md)**. Without a map file, stations still
 show on a plain grid.
 
+**Terrain.** A second file adds the shape of the ground: hill shading, contour
+lines (40 ft zoomed in, with 200 ft index lines) and the elevation under a
+crosshair in the middle of the map. **⋮ → Map file… → Get terrain for your
+area…** gives the command for [Mapterhorn](https://mapterhorn.com)'s free
+elevation data, the same way as the street map. A picture map, such as a USGS
+topo map exported as MBTiles, works there too. **⛰** on the map shows or hides
+it. Steps: **[MAPS.md → Terrain](MAPS.md#terrain)**.
+
 **Overlays.** **⋮ → Map overlays… → Add file…** draws GPX, KML or KMZ files
 (trail plans, search segments, waypoints from CalTopo, Gaia, onX, Google Earth
 or ATAK) in green on the map. Tick to show or hide; tap one to zoom to it or

@@ -1,0 +1,1 @@
+Terrain on the map: hill shading, contour lines and the elevation under a crosshair, from a free offline elevation file (Mapterhorn). Topo maps (USGS, as MBTiles or PMTiles) can be shown instead. ⛰ on the map shows or hides it.

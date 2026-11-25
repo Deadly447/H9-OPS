@@ -15,6 +15,8 @@ public final class MapRecipe {
 
     /** Where the guide lives (opened in the phone's browser). */
     public static final String GUIDE_URL = "https://github.com/Deadly447/H9-OPS/blob/main/MAPS.md";
+    /** The terrain part of the guide. */
+    public static final String TERRAIN_GUIDE_URL = "https://github.com/Deadly447/H9-OPS/blob/main/MAPS.md#terrain";
     /** The pmtiles tool for Windows, Mac and Linux. */
     public static final String TOOL_URL = "https://github.com/protomaps/go-pmtiles/releases";
 
@@ -47,6 +49,26 @@ public final class MapRecipe {
         double[] b = bbox(lat, lon, miles);
         return "pmtiles extract https://build.protomaps.com/" + buildDate(nowMs) + ".pmtiles h9-map.pmtiles --bbox="
                 + fmt(b[0]) + "," + fmt(b[1]) + "," + fmt(b[2]) + "," + fmt(b[3]);
+    }
+
+    /** Mapterhorn's free world terrain (elevation tiles, zoom 0–12), from Copernicus and other open data. */
+    public static final String TERRAIN_URL = "https://download.mapterhorn.com/planet.pmtiles";
+
+    /** Highest terrain zoom fetched: 12 (about 15 m detail) for small areas, 11 for the biggest. */
+    public static int terrainZoom(int miles) { return miles > 40 ? 11 : 12; }
+
+    /** "pmtiles extract https://download.mapterhorn.com/planet.pmtiles h9-terrain.pmtiles --maxzoom=12 --bbox=…" */
+    public static String terrainCommand(double lat, double lon, int miles) {
+        double[] b = bbox(lat, lon, miles);
+        return "pmtiles extract " + TERRAIN_URL + " h9-terrain.pmtiles --maxzoom=" + terrainZoom(miles) + " --bbox="
+                + fmt(b[0]) + "," + fmt(b[1]) + "," + fmt(b[2]) + "," + fmt(b[3]);
+    }
+
+    /** A rough terrain file size: it depends on the ground, so only a range. */
+    public static String roughTerrainSize(int miles) {
+        if (miles <= 15) return "roughly 10–30 MB";
+        if (miles <= 40) return "roughly 50–150 MB";
+        return "roughly 100–300 MB";
     }
 
     private static String fmt(double v) {

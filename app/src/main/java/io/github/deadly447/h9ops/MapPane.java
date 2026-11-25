@@ -21,6 +21,9 @@ import android.webkit.WebViewClient;
 
 import io.github.deadly447.h9ops.map.MapFile;
 import io.github.deadly447.h9ops.map.MapJson;
+import io.github.deadly447.h9ops.map.Terrain;
+import io.github.deadly447.h9ops.map.TerrainKind;
+import io.github.deadly447.h9ops.map.TileSource;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -63,6 +66,18 @@ final class MapPane {
         return new File(new File(c.getFilesDir(), "maps"), "area.pmtiles");
     }
 
+    /** The terrain or topo file (PMTiles or MBTiles; which one is read from the file itself). */
+    static File terrainFile(Context c) {
+        return new File(new File(c.getFilesDir(), "maps"), "terrain.tiles");
+    }
+
+    /** Remembers what a newly added terrain file holds, so it isn't worked out on every start. */
+    static void saveTerrainInfo(Context c, Terrain.Info info) {
+        c.getSharedPreferences("map", Context.MODE_PRIVATE).edit()
+                .putString("terrain_kind", info.kind.id).putInt("terrain_px", info.px)
+                .putBoolean("terrain_on", true).apply();
+    }
+
     final WebView web;
     private final Activity act;
     private final Host host;
@@ -70,6 +85,7 @@ final class MapPane {
     private final SharedPreferences prefs;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile MapFile file;          // read by the WebView's request threads
+    private volatile TileSource terrain;    // likewise
     private volatile String config = "{}";
     private boolean ready, shown, dirty;
     private final List<String> queued = new ArrayList<>();
@@ -122,6 +138,19 @@ final class MapPane {
         if (f.isFile()) {
             try { file = MapFile.open(f); } catch (IOException e) { file = null; }
         }
+        TileSource oldT = terrain;
+        terrain = null;
+        if (oldT != null) try { oldT.close(); } catch (IOException ignored) { }
+        File tf = terrainFile(act);
+        if (tf.isFile()) {
+            try {
+                terrain = Terrain.open(tf);
+                if (!prefs.contains("terrain_kind")) saveTerrainInfo(act, Terrain.detect(terrain));
+            } catch (IOException | RuntimeException e) {
+                terrain = null;
+                Repo.get(act).dev.log("MAP", "terrain file can't be read: " + e.getMessage());
+            }
+        }
         config = config();
         pageErrors = 0;
         ready = false;
@@ -165,11 +194,33 @@ final class MapPane {
             sb.append(",\"view\":[").append(num(f.header.centerLat)).append(',')
                     .append(num(f.header.centerLon)).append(',').append(f.header.centerZoom).append(']');
         }
+        TileSource t = terrain;
+        if (t != null) {
+            double[] b = t.bounds();
+            sb.append(",\"terrain\":{\"kind\":").append(MapJson.q(prefs.getString("terrain_kind", "picture")))
+                    .append(",\"px\":").append(prefs.getInt("terrain_px", 256))
+                    .append(",\"min\":").append(t.minZoom()).append(",\"max\":").append(t.maxZoom())
+                    .append(",\"v\":").append(MapJson.q(t.version()))
+                    .append(",\"bounds\":[").append(num(b[0])).append(',').append(num(b[1])).append(',')
+                    .append(num(b[2])).append(',').append(num(b[3])).append(']')
+                    .append(",\"attr\":").append(MapJson.q(attribution(t.metadata())))
+                    .append(",\"on\":").append(prefs.getBoolean("terrain_on", true)).append('}');
+        }
         sb.append(",\"night\":").append(Ui.night)
                 .append(",\"accent\":").append(MapJson.q(css(Ui.accent)))
                 .append(",\"text\":").append(MapJson.q(css(Ui.text)))
                 .append(",\"muted\":").append(MapJson.q(css(Ui.muted)));
         return sb.append('}').toString();
+    }
+
+    /** The file's own credit line, as plain text (tags removed), at most 80 characters. */
+    static String attribution(String metadata) {
+        String a = "";
+        try {
+            a = new org.json.JSONObject(metadata).optString("attribution", "");
+        } catch (org.json.JSONException | RuntimeException ignored) { }
+        a = a.replaceAll("<[^>]*>", "").replace("&copy;", "©").replace("&amp;", "&").replaceAll("\\s+", " ").trim();
+        return a.length() > 80 ? a.substring(0, 80) + "…" : a;
     }
 
     private static String css(int argb) {
@@ -236,6 +287,9 @@ final class MapPane {
         MapFile f = file;
         file = null;
         if (f != null) try { f.close(); } catch (IOException ignored) { }
+        TileSource t = terrain;
+        terrain = null;
+        if (t != null) try { t.close(); } catch (IOException ignored) { }
     }
 
     // ---------------------------------------------------------------- from the page
@@ -281,6 +335,10 @@ final class MapPane {
         }
 
         @JavascriptInterface public void full() { ui.post(host::mapFull); }
+
+        @JavascriptInterface public void terrain(boolean on) {
+            prefs.edit().putBoolean("terrain_on", on).apply();
+        }
     }
 
     // ---------------------------------------------------------------- requests
@@ -293,6 +351,7 @@ final class MapPane {
             String path = u.getPath();
             if (path == null || path.contains("..")) return status(404, "Not Found");
             if (path.startsWith("/tiles/")) return tile(path);
+            if (path.startsWith("/terrain/")) return terrainTile(path);
             if (path.startsWith("/map/") || path.startsWith("/fonts/")) return asset(path.substring(1));
             return status(404, "Not Found");
         }
@@ -347,6 +406,26 @@ final class MapPane {
         Map<String, String> h = headers();
         h.put("Content-Length", Integer.toString(b.length));
         return new WebResourceResponse("application/x-protobuf", null, 200, "OK", h, new ByteArrayInputStream(b));
+    }
+
+    /** One terrain or topo tile, "/terrain/z/x/y", as the picture it is stored as. 404 where there's none. */
+    private WebResourceResponse terrainTile(String path) {
+        TileSource t = terrain;
+        if (t == null) return status(404, "Not Found");
+        String[] p = path.substring("/terrain/".length()).split("/");
+        if (p.length != 3) return status(404, "Not Found");
+        byte[] b;
+        try {
+            b = t.tile(Integer.parseInt(p[0]), Integer.parseInt(p[1]), Integer.parseInt(p[2]));
+        } catch (NumberFormatException e) {
+            return status(404, "Not Found");
+        } catch (IOException e) {
+            return status(500, "Error");
+        }
+        if (b == null || b.length == 0) return status(404, "Not Found");
+        Map<String, String> h = headers();
+        h.put("Content-Length", Integer.toString(b.length));
+        return new WebResourceResponse(t.mime(), null, 200, "OK", h, new ByteArrayInputStream(b));
     }
 
     private static Map<String, String> headers() {

@@ -21,7 +21,7 @@ import java.util.zip.GZIPInputStream;
  * for plain tile URLs (no byte ranges, which an app's WebView handles
  * unreliably). No Android code, so it is unit-tested on its own.
  */
-public final class MapFile implements Closeable {
+public final class MapFile implements TileSource {
     public static final int HEADER_LEN = 127;
     /** Largest directory or tile read at once (real ones are kilobytes to a few megabytes). */
     public static final int MAX_READ = 32 * 1024 * 1024;
@@ -30,12 +30,14 @@ public final class MapFile implements Closeable {
     public static final class Header {
         public final int version, internalCompression, tileCompression, tileType, minZoom, maxZoom, centerZoom;
         public final double minLon, minLat, maxLon, maxLat, centerLon, centerLat;
-        final long rootOffset, rootLength, leafOffset, tileDataOffset;
+        final long rootOffset, rootLength, metaOffset, metaLength, leafOffset, tileDataOffset;
 
         private Header(ByteBuffer b) {
             version = b.get(7) & 0xFF;
             rootOffset = b.getLong(8);
             rootLength = b.getLong(16);
+            metaOffset = b.getLong(24);
+            metaLength = b.getLong(32);
             leafOffset = b.getLong(40);
             tileDataOffset = b.getLong(56);
             internalCompression = b.get(97) & 0xFF;
@@ -52,8 +54,16 @@ public final class MapFile implements Closeable {
             centerLat = b.getInt(123) / 1e7;
         }
 
-        /** Reads and checks a header. Throws with a reason a person can act on. */
+        /** Reads and checks a street map's header (vector tiles). Throws with a reason a person can act on. */
         public static Header parse(byte[] bytes) throws IOException {
+            return parse(bytes, false);
+        }
+
+        /**
+         * Reads and checks a header. {@code raster}: a terrain or topo file, whose tiles are
+         * pictures (PNG, JPEG or WebP); otherwise a street map, whose tiles are vector.
+         */
+        public static Header parse(byte[] bytes, boolean raster) throws IOException {
             if (bytes == null || bytes.length < HEADER_LEN) throw new IOException("Not a map file (too short)");
             for (int i = 0; i < 7; i++) {
                 if (bytes[i] != "PMTiles".charAt(i)) {
@@ -62,9 +72,14 @@ public final class MapFile implements Closeable {
             }
             Header h = new Header(ByteBuffer.wrap(bytes, 0, HEADER_LEN).order(ByteOrder.LITTLE_ENDIAN));
             if (h.version != 3) throw new IOException("PMTiles version " + h.version + " (only version 3 can be read)");
-            if (!h.vector()) {
-                throw new IOException("This map file holds " + h.typeName() + " tiles; only vector maps "
-                        + "(a Protomaps extract) can be shown");
+            if (!raster && !h.vector()) {
+                throw new IOException("This file holds " + h.typeName() + " tiles (pictures), not a street map. "
+                        + "If it's terrain or a topo map, add it under Terrain instead.");
+            }
+            if (raster && h.mime() == null) {
+                throw new IOException(h.vector()
+                        ? "This is a street map, not terrain. Add it under Map file instead."
+                        : "This file holds " + h.typeName() + " tiles, which can't be shown (PNG, JPEG or WebP only)");
             }
             if (!supported(h.internalCompression) || !supported(h.tileCompression)) {
                 throw new IOException("This map file is compressed in a way that can't be read (only gzip or none)");
@@ -80,6 +95,16 @@ public final class MapFile implements Closeable {
         }
 
         public boolean vector() { return tileType == 1; }
+
+        /** The tiles' picture type, or null for vector or unsupported tiles. */
+        public String mime() {
+            switch (tileType) {
+                case 2: return "image/png";
+                case 3: return "image/jpeg";
+                case 4: return "image/webp";
+                default: return null;
+            }
+        }
 
         /** 0 unknown (treated as none), 1 none, 2 gzip; brotli (3) and zstd (4) aren't readable here. */
         static boolean supported(int compression) { return compression <= 2; }
@@ -97,15 +122,19 @@ public final class MapFile implements Closeable {
 
         /** "Vector map, zoom 0–15, 36.50–39.00 N, 111.00–107.50 W". */
         public String describe() {
-            return String.format(Locale.US, "Vector map, zoom %d–%d, %s–%s, %s–%s",
-                    minZoom, maxZoom, lat(minLat), lat(maxLat), lon(minLon), lon(maxLon));
+            return area(vector() ? "Vector map" : typeName() + " tiles", minZoom, maxZoom, minLat, maxLat, minLon, maxLon);
         }
 
-        private static String lat(double v) {
+        static String area(String what, int minZoom, int maxZoom, double minLat, double maxLat, double minLon, double maxLon) {
+            return String.format(Locale.US, "%s, zoom %d–%d, %s–%s, %s–%s",
+                    what, minZoom, maxZoom, lat(minLat), lat(maxLat), lon(minLon), lon(maxLon));
+        }
+
+        static String lat(double v) {
             return String.format(Locale.US, "%.2f %s", Math.abs(v), v >= 0 ? "N" : "S");
         }
 
-        private static String lon(double v) {
+        static String lon(double v) {
             return String.format(Locale.US, "%.2f %s", Math.abs(v), v >= 0 ? "E" : "W");
         }
     }
@@ -124,13 +153,18 @@ public final class MapFile implements Closeable {
         this.header = header;
     }
 
-    /** Opens and checks a map file. */
+    /** Opens and checks a street map file (vector tiles). */
     public static MapFile open(File f) throws IOException {
+        return open(f, false);
+    }
+
+    /** Opens and checks a map file; {@code raster}: terrain or topo pictures instead of vector tiles. */
+    public static MapFile open(File f, boolean raster) throws IOException {
         RandomAccessFile raf = new RandomAccessFile(f, "r");
         try {
             byte[] h = new byte[HEADER_LEN];
             raf.readFully(h);
-            return new MapFile(f, raf, Header.parse(h));
+            return new MapFile(f, raf, Header.parse(h, raster));
         } catch (IOException | RuntimeException e) {
             raf.close();
             throw e instanceof IOException ? (IOException) e : new IOException("Not a map file", e);
@@ -174,6 +208,7 @@ public final class MapFile implements Closeable {
      * The tile at zoom z, column x, row y, uncompressed (a Mapbox vector tile),
      * or null when the map has none there (outside its area or zoom range).
      */
+    @Override
     public byte[] tile(int z, int x, int y) throws IOException {
         if (z < 0 || z > 26 || x < 0 || y < 0 || x >= (1 << z) || y >= (1 << z)) return null;
         if (z < header.minZoom || z > header.maxZoom) return null;
@@ -289,7 +324,27 @@ public final class MapFile implements Closeable {
         return acc + d;
     }
 
+    /** The file's metadata (JSON, written by whatever made it), or "{}". At most 1 MB is read. */
+    public String metadata() {
+        try {
+            if (header.metaLength <= 0 || header.metaLength > 1 << 20) return "{}";
+            byte[] raw = read(header.metaOffset, (int) header.metaLength);
+            return new String(decompress(raw, header.internalCompression), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException e) {
+            return "{}";
+        }
+    }
+
+    // TileSource
+    @Override public int minZoom() { return header.minZoom; }
+    @Override public int maxZoom() { return header.maxZoom; }
+    @Override public double[] bounds() { return new double[]{header.minLat, header.minLon, header.maxLat, header.maxLon}; }
+    @Override public String mime() { return header.mime(); }
+    @Override public String describe() { return header.describe(); }
+    @Override public long size() { return size; }
+
     /** Changes whenever the file is replaced, so the page doesn't reuse an old copy. */
+    @Override
     public String version() {
         return Long.toString(path.lastModified(), 36) + "-" + Long.toString(size, 36);
     }
