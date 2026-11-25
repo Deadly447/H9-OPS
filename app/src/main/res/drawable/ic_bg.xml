@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- adaptive-icon background (H9 OPS: white on black, amber brackets) -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#1B3A2F" />
+    <solid android:color="#FF000000" />
 </shape>

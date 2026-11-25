@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2
+
+- New app icon in the app's own look: "H9" inside the radio card's corner
+  brackets, white and amber on black. Themed icons on Android 13+ work too.
+
 ## 1.1.1
 
 - No changes to the app. Store listing and screenshots for F-Droid
