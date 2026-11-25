@@ -94,7 +94,7 @@ based on TD-H9 firmware V1.0.38 and adds:
 It also adds scan speed, APRS mute on channel B, battery percent, and squelch
 tail and receive filter options: see [firmware/README.md](firmware/README.md).
 
-**Getting it:** this repository holds no TIDRADIO firmware. You make P2 from
+**Getting it:** this repository holds no official TIDRADIO firmware. You can use the tid updater and the patched firmware is in the files, look for 1.0.38.P2.fw. You can also make P2 from
 TIDRADIO's official V1.0.38 file yourself, offline, with
 [`firmware/p2-patcher.html`](firmware/p2-patcher.html) (in a browser) or
 [`firmware/patch_p2.py`](firmware/patch_p2.py); both check the file before
