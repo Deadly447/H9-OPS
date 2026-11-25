@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+- No changes to the app. Store listing and screenshots for F-Droid
+  (`fastlane/metadata`), an Obtainium guide, the roadmap, and the P2
+  firmware patcher are in this release.
+
 ## 1.1.0
 
 - **Map tab:** stations on an offline map (a Protomaps PMTiles file for your
