@@ -1,0 +1,1 @@
+Offline map with a guided map download, GPX/KML overlays, smart timed positions, weather history and graphs, alerts, objects, bulletins, and a new two-row layout.

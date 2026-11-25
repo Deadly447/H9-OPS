@@ -1,0 +1,13 @@
+<p><b>H9 OPS</b> is an offline APRS app for the TIDRADIO TD-H9 handheld. The radio decodes APRS and passes each packet to the phone over Bluetooth LE; H9 OPS shows the stations it hears, sends and receives APRS messages through the radio, and puts everyone on an offline map.</p>
+<p>Built for emergency preparedness and the backcountry: it needs no internet, no cell signal, no server and no account. Phone and radio are enough.</p>
+<ul>
+<li>Stations heard, with position, weather, telemetry and a raw packet log</li>
+<li>APRS messaging radio to radio, with acknowledgements, retries and delivery ticks</li>
+<li>Send your position to one station, exact or rounded, once, on a timer, or with smart timing (more often when moving)</li>
+<li>Offline map from a map file you make for your area, with GPX/KML overlays for trail plans and search areas</li>
+<li>Weather stations kept for 30 days, with small graphs</li>
+<li>Alerts for watched callsigns, areas and emergency packets; objects and bulletins</li>
+<li>Track recording with GPX export; night red mode</li>
+</ul>
+<p><b>Needs H9 OPS firmware P2 on the radio.</b> TIDRADIO's stock firmware has no Bluetooth KISS service. The project page explains how to make P2 from TIDRADIO's official firmware.</p>
+<p>Privacy: the app has no internet permission at all. Data stays on the phone.</p>

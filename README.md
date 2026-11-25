@@ -19,6 +19,18 @@ as a message to one station, when you tap 📍 or on a timer you set.
 > finds the radio but can't connect ("This radio has no KISS service").
 > See [Radio firmware](#radio-firmware-p2) below.
 
+<p align="center">
+<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1_stations.png" width="24%" alt="Stations list with the radio card and the two rows of tabs and tools">
+<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2_map.png" width="24%" alt="Map tab with team tracks, search segments and an approximate shared position">
+<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3_weather.png" width="24%" alt="Weather stations as cards with town and temperature">
+<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4_graphs.png" width="24%" alt="Weather graphs for one station over 24 hours">
+</p>
+<p align="center">
+<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/5_messages.png" width="24%" alt="A message conversation with delivery ticks">
+<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/6_getmap.png" width="24%" alt="Get a map for your area: the command for a box around you">
+</p>
+<p align="center"><sub>Made-up stations and places. The map shows the plain grid used before a map file is added.</sub></p>
+
 ## Why it works this way
 
 I built H9 OPS for emergency preparedness: for the day the cell towers are
@@ -63,6 +75,7 @@ are calm, so nothing has to be fetched when they aren't.
 - [Building the APK](#building-the-apk)
 - [What it decodes](#what-it-decodes)
 - [License](#license)
+- [Roadmap](ROADMAP.md)
 
 ## Radio firmware (P2)
 
@@ -95,6 +108,10 @@ it returns the radio to stock), and don't flash a radio you can't afford to
 recover.
 
 ## Install
+
+**Easiest:** install and update through **Obtainium**, straight from this
+repository's releases: [docs/OBTAINIUM.md](docs/OBTAINIUM.md). Or download
+the APK from [Releases](https://github.com/Deadly447/H9-OPS/releases).
 
 Requirements:
 
