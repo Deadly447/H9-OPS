@@ -39,6 +39,11 @@ import io.github.deadly447.h9ops.aprs.PositionShare;
 import io.github.deadly447.h9ops.aprs.Station;
 import io.github.deadly447.h9ops.aprs.StationStore;
 import io.github.deadly447.h9ops.aprs.Kiss;
+import io.github.deadly447.h9ops.aprs.AprsParser;
+import io.github.deadly447.h9ops.aprs.SmartBeacon;
+import io.github.deadly447.h9ops.aprs.WxHistory;
+import io.github.deadly447.h9ops.map.MapFile;
+import io.github.deadly447.h9ops.map.Places;
 import io.github.deadly447.h9ops.track.Tracks;
 
 /**
@@ -336,7 +341,7 @@ public final class Repo {
     }
 
     /** Starts sending my position to {@code peer}; the first one goes out straight away. */
-    public String startAuto(String peer, int minutes, io.github.deadly447.h9ops.aprs.SmartBeacon.Profile smart,
+    public String startAuto(String peer, int minutes, SmartBeacon.Profile smart,
                             PositionShare.Blur blur, int stopHours) {
         if (myCall() == null) return "Set your callsign first";
         AutoPosition.Plan plan = auto.start(peer, minutes, smart, blur, stopHours, System.currentTimeMillis());
@@ -813,7 +818,7 @@ public final class Repo {
                 continue;
             }
             boolean ok = transmitter.transmit(frame);
-            AprsPacket p = io.github.deadly447.h9ops.aprs.AprsParser.parse(Ax25.parse(frame));
+            AprsPacket p = AprsParser.parse(Ax25.parse(frame));
             if (p.type == AprsPacket.Type.OBJECT) {
                 p.mine = true;
                 store.addShared(now, p);             // on our own map and list (the radio doesn't hear itself)
@@ -893,8 +898,8 @@ public final class Repo {
     }
 
     private static AprsPacket parse(byte[] frame) {
-        io.github.deadly447.h9ops.aprs.Ax25 f = io.github.deadly447.h9ops.aprs.Ax25.parse(frame);
-        return f == null ? null : io.github.deadly447.h9ops.aprs.AprsParser.parse(f);
+        Ax25 f = Ax25.parse(frame);
+        return f == null ? null : AprsParser.parse(f);
     }
 
     // ---- history (read on the background thread, answered on the main thread) ----
@@ -927,8 +932,8 @@ public final class Repo {
     }
 
     // Town names come from the offline map file (its "places" layer). Background thread only.
-    private io.github.deadly447.h9ops.map.MapFile placesFile;
-    private io.github.deadly447.h9ops.map.Places places;
+    private MapFile placesFile;
+    private Places places;
     private long placesStamp;
     private final java.util.Map<String, String> placeByStation = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -950,8 +955,8 @@ public final class Repo {
             if (!mf.isFile()) return null;
             if (places == null || placesStamp != mf.lastModified()) {
                 if (placesFile != null) try { placesFile.close(); } catch (IOException ignored) { }
-                placesFile = io.github.deadly447.h9ops.map.MapFile.open(mf);
-                places = new io.github.deadly447.h9ops.map.Places(placesFile);
+                placesFile = MapFile.open(mf);
+                places = new Places(placesFile);
                 placesStamp = mf.lastModified();
             }
             String town = places.near(lat, lon);
@@ -966,11 +971,11 @@ public final class Repo {
     public String placeName(String name) { return placeByStation.get(name); }
 
     /** One station's weather reports from {@code since} on, oldest first. */
-    public void weather(String name, long since, java.util.function.Consumer<List<io.github.deadly447.h9ops.aprs.WxHistory.Sample>> done) {
+    public void weather(String name, long since, java.util.function.Consumer<List<WxHistory.Sample>> done) {
         io.execute(() -> {
-            List<io.github.deadly447.h9ops.aprs.WxHistory.Sample> r;
+            List<WxHistory.Sample> r;
             try { r = history.weather(name, since); } catch (RuntimeException e) { r = new ArrayList<>(); }
-            final List<io.github.deadly447.h9ops.aprs.WxHistory.Sample> r2 = r;
+            final List<WxHistory.Sample> r2 = r;
             main.post(() -> done.accept(r2));
         });
     }
