@@ -67,7 +67,7 @@ public final class MapFile implements TileSource {
             if (bytes == null || bytes.length < HEADER_LEN) throw new IOException("Not a map file (too short)");
             for (int i = 0; i < 7; i++) {
                 if (bytes[i] != "PMTiles".charAt(i)) {
-                    throw new IOException("Not a PMTiles map file. MBTiles and other formats can't be read yet.");
+                    throw new IOException("Not a PMTiles map file. A topo or terrain map (MBTiles) goes under Terrain instead.");
                 }
             }
             Header h = new Header(ByteBuffer.wrap(bytes, 0, HEADER_LEN).order(ByteOrder.LITTLE_ENDIAN));

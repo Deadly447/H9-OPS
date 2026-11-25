@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1
+
+- A topo or terrain file (MBTiles, or picture PMTiles) chosen as the street
+  map is now added under Terrain by itself, instead of being refused.
+
 ## 1.2.0
 
 - **Terrain on the map:** hill shading, contour lines (every 40 ft zoomed in,

@@ -2776,11 +2776,36 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         catch (ActivityNotFoundException e) { toast("This phone has no file picker"); }
     }
 
+    /** True for an MBTiles file, or a PMTiles file of pictures rather than vector tiles. */
+    private boolean pictureMap(Uri uri) {
+        byte[] head = new byte[MapFile.HEADER_LEN];
+        int got = 0;
+        try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) return false;
+            while (got < head.length) {
+                int n = in.read(head, got, head.length - got);
+                if (n < 0) break;
+                got += n;
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            return false;
+        }
+        if (io.github.deadly447.h9ops.map.MbTiles.looksLike(head)) return true;
+        try {
+            return !MapFile.Header.parse(got == head.length ? head : java.util.Arrays.copyOf(head, got), true).vector();
+        } catch (java.io.IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
     /**
      * Copies a chosen file into the app's storage, checking it first: a street map must be a
      * vector PMTiles file; terrain is a PMTiles or MBTiles file of elevation or picture tiles.
      */
-    private void importMap(Uri uri, boolean terrain) {
+    private void importMap(Uri uri, boolean asTerrain) {
+        // A topo or terrain file chosen as the street map: put it under Terrain instead.
+        final boolean terrain = asTerrain || pictureMap(uri);
+        if (terrain && !asTerrain) toast("That's a topo or terrain map: adding it under Terrain");
         long total = -1;
         try (android.database.Cursor c = getContentResolver().query(uri,
                 new String[]{android.provider.OpenableColumns.SIZE}, null, null, null)) {

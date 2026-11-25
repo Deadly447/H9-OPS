@@ -1,0 +1,1 @@
+A topo or terrain file chosen as the street map is now added under Terrain by itself, instead of being refused.
