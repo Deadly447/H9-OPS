@@ -49,6 +49,29 @@ public final class Station {
         }
     }
 
+    /**
+     * Station-list tag for how the last packet arrived: "DIRECT", "VIA ABAJO", or for a
+     * packet relayed from the internet by an iGate, "NET · ABAJO" (the iGate's own RF
+     * transmission may be heard direct, but the station itself never was).
+     */
+    public String routeTag() {
+        AprsPacket q = last;
+        if (q != null && q.thirdParty && q.gatedBy != null) {
+            return (q.fromInternet ? "NET · " : "GATED · ") + q.gatedBy.toUpperCase(java.util.Locale.US);
+        }
+        return lastVia == null ? "DIRECT" : "VIA " + lastVia.toUpperCase(java.util.Locale.US);
+    }
+
+    /** One line for the station's details: "Heard direct", "Heard via ABAJO", "From the internet, gated by ABAJO". */
+    public String routeLine() {
+        AprsPacket q = last;
+        if (q != null && q.thirdParty && q.gatedBy != null) {
+            return (q.fromInternet ? "From the internet, gated by " : "Gated by ") + q.gatedBy
+                    + (q.heardVia == null ? " (heard direct from " + q.gatedBy + ")" : ", via " + q.heardVia);
+        }
+        return lastVia == null ? "Heard direct" : "Heard via " + lastVia;
+    }
+
     public Station(String name) {
         this.name = name;
     }

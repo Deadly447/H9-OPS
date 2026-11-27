@@ -1261,7 +1261,7 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
             Station st = repo.store.get(peer);
             heard.setText(st == null ? "not heard yet"
                     : Format.ago(System.currentTimeMillis() - st.lastHeard)
-                    + (st.lastVia == null ? " · direct" : " · via " + st.lastVia));
+                    + " · " + st.routeLine().replaceFirst("^Heard ", "").toLowerCase(Locale.US));
             text.setFilters(new InputFilter[]{new InputFilter.LengthFilter(Messenger.MAX_TEXT)});
             List<Messenger.Msg> msgs = repo.messenger.messages(peer);
             lines.removeAllViews();
@@ -1726,7 +1726,7 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
         if (s.object && s.last != null) sb.append("Object sent by ").append(s.last.sender).append("\n");
         sb.append("Last heard ").append(Format.ago(now - s.lastHeard))
                 .append(" (").append(time(s.lastHeard)).append(")\n");
-        sb.append(s.lastVia == null ? "Heard direct" : "Heard via " + s.lastVia).append("\n");
+        sb.append(s.routeLine()).append("\n");
         sb.append(s.count).append(s.count == 1 ? " packet" : " packets").append(" since ")
                 .append(time(s.firstHeard)).append("\n\n");
         if (pos != null) {
@@ -3002,8 +3002,7 @@ public class MainActivity extends Activity implements Repo.Listener, MapPane.Hos
             long now = System.currentTimeMillis();
             AprsPacket pos = s.lastPosition;
             boolean shared = pos != null && pos.raw != null && pos.raw.endsWith("(position by message)") && pos == s.last;
-            String tag = shared ? "SHARED" : s.lastVia == null ? "DIRECT"
-                    : "VIA " + s.lastVia.toUpperCase(Locale.US);
+            String tag = shared ? "SHARED" : s.routeTag();
             String what = pos != null ? Symbols.name(pos.symTable, pos.symCode) : null;
             String sum = s.summary();
             String l = what == null ? (sum.isEmpty() ? s.count + " packets" : sum)

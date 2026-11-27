@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.2
+
+- Stations relayed from the internet by an iGate (for example SMS messages)
+  show NET · and the iGate's name instead of DIRECT.
+
 ## 1.2.1
 
 - A topo or terrain file (MBTiles, or picture PMTiles) chosen as the street
